@@ -1,32 +1,76 @@
 import { loadState, saveState, getDefaultState, newId } from "./state.js";
 import { brl, qs, qsa, setTheme } from "./ui.js";
-import { calcCardFee, calcProfit } from "./db.js";
+import { calcCardFee, calcProfit, calcMargin, calcROI } from "./db.js";
 
-let state = loadState();
-let chartInstances = {};
+let state = normalizeState(loadState());
 
 function mount() {
-  setTheme(state.theme);
+  // tema inicial
+  setTheme(state.theme || "dark");
+
   const btnTheme = qs("#btnTheme");
   syncThemeIcon(btnTheme);
+
   btnTheme?.addEventListener("click", () => {
     state.theme = state.theme === "light" ? "dark" : "light";
     persist();
     setTheme(state.theme);
     syncThemeIcon(btnTheme);
   });
+
   const btnExport = qs("#btnExport");
   btnExport?.addEventListener("click", () => showExportModal());
+
+  // navegação via hash
   window.addEventListener("hashchange", () => {
     const r = (location.hash || "").replace("#", "").trim();
     if (r) navigate(r, true);
   });
-  qsa(".nav__item").forEach(btn => {
+
+  // nav dock
+  qsa(".nav__item").forEach((btn) => {
     btn.addEventListener("click", () => navigate(btn.dataset.route));
   });
+
   const hashRoute = (location.hash || "").replace("#", "").trim();
   navigate(hashRoute || state.route || "home", true);
+
   registerSW();
+}
+
+function normalizeState(s) {
+  const base = getDefaultState();
+
+  // merge raso + garantir sub-objetos
+  const merged = {
+    ...base,
+    ...(s || {}),
+    ui: { ...base.ui, ...((s && s.ui) || {}) },
+  };
+
+  // garantir arrays
+  merged.products = Array.isArray(merged.products) ? merged.products : [];
+  merged.sales = Array.isArray(merged.sales) ? merged.sales : [];
+  merged.orders = Array.isArray(merged.orders) ? merged.orders : [];
+  merged.cashMoves = Array.isArray(merged.cashMoves) ? merged.cashMoves : [];
+
+  // garantir objetos
+  merged.ui.saleCart = merged.ui.saleCart && typeof merged.ui.saleCart === "object" ? merged.ui.saleCart : {};
+  merged.ui.orderDraftItems =
+    merged.ui.orderDraftItems && typeof merged.ui.orderDraftItems === "object" ? merged.ui.orderDraftItems : {};
+
+  // defaults seguros
+  merged.theme = merged.theme === "light" ? "light" : "dark";
+  merged.route = merged.route || "home";
+  merged.metaMensal = Number.isFinite(Number(merged.metaMensal)) ? Number(merged.metaMensal) : 3000;
+  merged.mesRef = merged.mesRef || monthKey();
+
+  merged.ui.salePay = merged.ui.salePay || "pix";
+  merged.ui.saleDiscount = Number(merged.ui.saleDiscount || 0);
+  merged.ui.saleExtra = Number(merged.ui.saleExtra || 0);
+  merged.ui.saleReceived = Number(merged.ui.saleReceived || 0);
+
+  return merged;
 }
 
 function syncThemeIcon(btnTheme) {
@@ -35,20 +79,32 @@ function syncThemeIcon(btnTheme) {
 }
 
 function persist() {
+  state = normalizeState(state);
   saveState(state);
 }
 
 function navigate(route, silent = false) {
-  state.route = route;
+  const r = String(route || "home").trim();
+  state.route = r || "home";
   persist();
-  qsa(".nav__item").forEach(b => b.classList.toggle("is-active", b.dataset.route === route));
-  render(route);
+
+  qsa(".nav__item").forEach((b) => b.classList.toggle("is-active", b.dataset.route === state.route));
+  render(state.route);
+
+  // manter hash coerente
+  try {
+    if ((location.hash || "").replace("#", "") !== state.route) {
+      history.replaceState(null, "", `#${state.route}`);
+    }
+  } catch (_) {}
+
   if (!silent) window.scrollTo({ top: 0, behavior: "smooth" });
 }
 
 function render(route) {
   const root = qs("#viewRoot");
   if (!root) return;
+
   const routes = {
     home: () => renderHome(root),
     sale: () => renderSale(root),
@@ -57,42 +113,56 @@ function render(route) {
     reports: () => renderReports(root),
     more: () => renderMore(root),
   };
-  (routes[route] || routes.more)();
+
+  (routes[route] || routes.home)();
 }
 
+/* =========================================================
+   HOME
+========================================================= */
 function renderHome(root) {
   const today = getTodaySummary();
   const openToReceive = getOpenOrdersToReceive();
   const month = getMonthSummary();
   const week = getLast7DaysSummary();
+
   const meta = Number(state.metaMensal || 0);
   const progresso = meta > 0 ? Math.min(100, (month.lucro / meta) * 100) : 0;
   const faltam = Math.max(0, meta - month.lucro);
   const daysLeft = getRemainingDaysInMonth();
-  const mediaNecessaria = daysLeft > 0 ? (faltam / daysLeft) : faltam;
+  const mediaNecessaria = daysLeft > 0 ? faltam / daysLeft : faltam;
+
   const cash = getCashSummaryForDate(todayKey());
 
-  const html = `<div class="h1">📊 Painel Inteligente</div>
+  const html = `
+    <div class="h1">📊 Painel Inteligente</div>
+
     <section class="stats">
       ${statCard("Faturamento (hoje)", brl(today.faturamento), "💰")}
       ${statCard("Custos (hoje)", brl(today.custos), "📉")}
       ${statCard("Taxas (cartão)", brl(today.taxas), "💳")}
       ${statCard("Lucro real (hoje)", brl(today.lucro), "✨")}
     </section>
+
     <div style="height:12px"></div>
+
     <section class="card section">
       <div style="display:flex;justify-content:space-between;align-items:flex-end;gap:10px">
         <div>
           <div style="font-weight:900">🎯 Meta de lucro do mês</div>
-          <div class="muted" style="font-size:12px;margin-top:4px">${state.mesRef || monthKey()}</div>
+          <div class="muted" style="font-size:12px;margin-top:4px">${escapeHtml(state.mesRef || monthKey())}</div>
         </div>
         <button class="btn btn--small" id="btnEditMeta">Editar</button>
       </div>
+
       <div style="height:10px"></div>
+
       <div class="progress" aria-label="Progresso da meta">
         <div class="progress__bar" style="width:${progresso.toFixed(1)}%"></div>
       </div>
+
       <div style="height:10px"></div>
+
       <div class="pillrow">
         <div class="pill">Lucro mês: <span class="value">${brl(month.lucro)}</span></div>
         <div class="pill">Meta: <span class="value">${brl(meta)}</span></div>
@@ -100,7 +170,9 @@ function renderHome(root) {
         <div class="pill">Média/dia: <span class="value">${brl(mediaNecessaria)}</span></div>
       </div>
     </section>
+
     <div style="height:12px"></div>
+
     <section class="card">
       <div class="row">
         <div class="kpi"><b>💰 Caixa do dia</b><span>Entradas − saídas (saldo)</span></div>
@@ -127,7 +199,9 @@ function renderHome(root) {
         <div class="badge badge--bad">${brl(cash.saidas)}</div>
       </div>
     </section>
+
     <div style="height:12px"></div>
+
     <section class="card">
       <div class="row">
         <div class="kpi"><b>📦 Encomendas abertas</b><span>Total a receber</span></div>
@@ -138,28 +212,37 @@ function renderHome(root) {
         <div class="badge">${brl(month.faturamento)}</div>
       </div>
     </section>
+
     <div style="height:12px"></div>
+
     <section class="card section">
       <div style="font-weight:900;margin-bottom:8px">📊 Últimos 7 dias</div>
       ${renderWeekTable(week)}
       <div class="muted" style="font-size:12px;margin-top:10px">Lucro real = venda − custo − taxa.</div>
     </section>
+
     <div style="height:12px"></div>
+
     <button class="btn btn--brand" id="btnQuickSale">⚡ Fazer venda (balcão)</button>
     <div style="height:8px"></div>
-    <button class="btn" id="btnSeedDemo">📊 Inserir dados de teste (demo)</button>`;
+    <button class="btn" id="btnSeedDemo">📊 Inserir dados de teste (demo)</button>
+  `;
 
   root.innerHTML = html;
+
   qs("#btnQuickSale")?.addEventListener("click", () => navigate("sale"));
+
   qs("#btnSeedDemo")?.addEventListener("click", () => {
     seedDemo();
     toast("Dados demo inseridos ✅", "success");
     renderHome(root);
   });
+
   qs("#btnEditMeta")?.addEventListener("click", () => {
     const atual = Number(state.metaMensal || 0);
     const v = prompt("Defina sua meta de LUCRO do mês (em R$). Ex: 3000", String(atual));
     if (v === null) return;
+
     const num = parseMoneyInput(v);
     if (!Number.isFinite(num) || num < 0) {
       toast("Valor inválido. Use um número como 3000.", "error");
@@ -174,17 +257,23 @@ function renderHome(root) {
 }
 
 function statCard(label, value, icon = "") {
-  return `<div class="card stat">
+  return `
+    <div class="card stat">
       <div style="font-size:24px;margin-bottom:8px">${icon}</div>
-      <div class="stat__label">${label}</div>
-      <div class="stat__value">${value}</div>
-    </div>`;
+      <div class="stat__label">${escapeHtml(label)}</div>
+      <div class="stat__value">${escapeHtml(value)}</div>
+    </div>
+  `;
 }
 
+/* =========================================================
+   SALE (Balcão)
+========================================================= */
 function renderSale(root) {
   const products = state.products || [];
   if (products.length === 0) {
-    root.innerHTML = `<div class="h1">💳 Venda (Balcão)</div>
+    root.innerHTML = `
+      <div class="h1">💳 Venda (Balcão)</div>
       <section class="card section">
         <div class="empty-state">
           <div class="empty-state__icon">📦</div>
@@ -192,7 +281,8 @@ function renderSale(root) {
           <div class="empty-state__description">Cadastre seus produtos primeiro para começar a vender.</div>
           <button class="btn btn--brand" id="goProducts">Cadastrar produtos</button>
         </div>
-      </section>`;
+      </section>
+    `;
     qs("#goProducts")?.addEventListener("click", () => navigate("products"));
     return;
   }
@@ -202,20 +292,26 @@ function renderSale(root) {
   const desconto = Number(state.ui.saleDiscount || 0);
   const acrescimo = Number(state.ui.saleExtra || 0);
   const recebido = Number(state.ui.saleReceived || 0);
+
   const totals = computeCartTotals(cart, products, metodo, desconto, acrescimo);
   const falta = metodo === "dinheiro" ? Math.max(0, totals.totalFinal - recebido) : 0;
   const troco = metodo === "dinheiro" ? Math.max(0, recebido - totals.totalFinal) : 0;
 
-  const html = `<div class="h1">💳 Venda (Balcão)</div>
+  const html = `
+    <div class="h1">💳 Venda (Balcão)</div>
+
     <section class="card section">
       <div style="font-weight:900;margin-bottom:10px">➕ Adicionar produtos</div>
       <div class="productlist">
-        ${products.map(p => renderProductAddRow(p, cart)).join("")}
+        ${products.map((p) => renderProductAddRow(p, cart)).join("")}
       </div>
     </section>
+
     <div style="height:12px"></div>
+
     <section class="card section">
       <div style="font-weight:900;margin-bottom:10px">📋 Resumo da venda</div>
+
       <div class="field">
         <div class="label">Pagamento</div>
         <div style="display:flex;gap:8px;flex-wrap:wrap">
@@ -224,103 +320,160 @@ function renderSale(root) {
           ${radioPill("pay", "cartao", "💳 Cartão", metodo === "cartao")}
         </div>
       </div>
+
       <div class="field mt-12">
         <div class="label">Desconto</div>
         <input type="number" class="input" id="inpDiscount" placeholder="0,00" value="${formatMoneyInput(desconto)}" />
       </div>
+
       <div class="field mt-12">
         <div class="label">Acréscimo (entrega, etc)</div>
         <input type="number" class="input" id="inpExtra" placeholder="0,00" value="${formatMoneyInput(acrescimo)}" />
       </div>
-      ${metodo === "dinheiro" ? `<div class="field mt-12">
+
+      ${
+        metodo === "dinheiro"
+          ? `
+        <div class="field mt-12">
           <div class="label">Recebido em dinheiro</div>
           <input type="number" class="input" id="inpRecebido" placeholder="0,00" value="${formatMoneyInput(recebido)}" />
-        </div>` : ""}
+        </div>
+      `
+          : ""
+      }
+
       <div style="height:12px"></div>
+
       <div class="card section" style="background:rgba(255,79,163,0.08);border-color:rgba(255,79,163,0.25)">
         <div class="row">
           <div class="kpi"><b>Subtotal</b><span>Produtos</span></div>
           <div class="value">${brl(totals.subtotal)}</div>
         </div>
+
         <div class="row">
           <div class="kpi"><b>Custo</b><span>Total de custo</span></div>
           <div class="value">${brl(totals.totalCusto)}</div>
         </div>
+
         <div class="row">
           <div class="kpi"><b>Taxa</b><span>${metodo === "cartao" ? "2.99%" : "Sem taxa"}</span></div>
           <div class="value">${brl(totals.taxa)}</div>
         </div>
+
         <div class="row">
           <div class="kpi"><b>Desconto</b><span>Aplicado</span></div>
           <div class="value">-${brl(desconto)}</div>
         </div>
+
         <div class="row">
           <div class="kpi"><b>Acréscimo</b><span>Adicionado</span></div>
           <div class="value">+${brl(acrescimo)}</div>
         </div>
+
         <div class="carttotal">
           <div class="kpi"><b>Total</b><span>A cobrar</span></div>
           <div class="big" style="color:var(--brand)">${brl(totals.totalFinal)}</div>
         </div>
+
         <div class="carttotal">
           <div class="kpi"><b>Lucro</b><span>Desta venda</span></div>
           <div class="big" style="color:var(--good)">${brl(totals.lucro)}</div>
         </div>
-        ${metodo === "dinheiro" && falta > 0 ? `<div class="carttotal" style="color:var(--warn)">
-          <div class="kpi"><b>Falta</b><span>Ainda a receber</span></div>
-          <div class="big">${brl(falta)}</div>
-        </div>` : ""}
-        ${metodo === "dinheiro" && troco > 0 ? `<div class="carttotal" style="color:var(--good)">
-          <div class="kpi"><b>Troco</b><span>A devolver</span></div>
-          <div class="big">${brl(troco)}</div>
-        </div>` : ""}
+
+        ${
+          metodo === "dinheiro" && falta > 0
+            ? `
+          <div class="carttotal" style="color:var(--warn)">
+            <div class="kpi"><b>Falta</b><span>Ainda a receber</span></div>
+            <div class="big">${brl(falta)}</div>
+          </div>
+        `
+            : ""
+        }
+
+        ${
+          metodo === "dinheiro" && troco > 0
+            ? `
+          <div class="carttotal" style="color:var(--good)">
+            <div class="kpi"><b>Troco</b><span>A devolver</span></div>
+            <div class="big">${brl(troco)}</div>
+          </div>
+        `
+            : ""
+        }
       </div>
+
       <div style="height:12px"></div>
       <button class="btn btn--brand" id="btnFinalizeSale" style="width:100%">✅ Finalizar venda</button>
       <div style="height:8px"></div>
       <button class="btn" id="btnClearCart" style="width:100%">🗑️ Limpar carrinho</button>
-    </section>`;
+    </section>
+  `;
 
   root.innerHTML = html;
+
+  // inputs
   const inpDiscount = qs("#inpDiscount");
   const inpExtra = qs("#inpExtra");
   const inpRecebido = qs("#inpRecebido");
 
-  inpDiscount?.addEventListener("change", () => {
+  inpDiscount?.addEventListener("input", () => {
     state.ui.saleDiscount = parseMoneyInput(inpDiscount.value);
     persist();
     renderSale(root);
   });
-  inpExtra?.addEventListener("change", () => {
+
+  inpExtra?.addEventListener("input", () => {
     state.ui.saleExtra = parseMoneyInput(inpExtra.value);
     persist();
     renderSale(root);
   });
-  inpRecebido?.addEventListener("change", () => {
+
+  inpRecebido?.addEventListener("input", () => {
     state.ui.saleReceived = parseMoneyInput(inpRecebido.value);
     persist();
     renderSale(root);
   });
 
-  qsa("[data-pay]").forEach(btn => {
+  // escolher pagamento
+  qsa("[data-pay]").forEach((btn) => {
     btn.addEventListener("click", () => {
-      state.ui.salePay = btn.dataset.pay;
+      state.ui.salePay = btn.dataset.pay || "pix";
       state.ui.saleReceived = 0;
       persist();
       renderSale(root);
     });
   });
 
+  // ✅ FIX PRINCIPAL: + e - do carrinho
+  qsa("[data-op]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const prodId = btn.dataset.prod;
+      const op = btn.dataset.op;
+      const qty = cart[prodId] || 0;
+
+      cart[prodId] = op === "plus" ? qty + 1 : Math.max(0, qty - 1);
+      if (cart[prodId] === 0) delete cart[prodId];
+
+      state.ui.saleCart = cart;
+      persist();
+      renderSale(root);
+    });
+  });
+
+  // finalizar
   qs("#btnFinalizeSale")?.addEventListener("click", () => {
     if (Object.keys(cart).length === 0) {
       toast("Carrinho vazio!", "error");
       return;
     }
     if (metodo === "dinheiro" && falta > 0) {
-      toast("Falta receber R$ " + brl(falta), "error");
+      toast(`Falta receber ${brl(falta)}`, "error");
       return;
     }
+
     const items = cartToItems(cart, products);
+
     const venda = {
       id: newId(),
       date: todayKey(),
@@ -334,14 +487,18 @@ function renderSale(root) {
       totalVenda: totals.totalFinal,
       totalCusto: totals.totalCusto,
       taxaCartao: totals.taxa,
-      lucro: totals.lucro
+      lucro: totals.lucro,
     };
+
     state.sales.push(venda);
+
+    // reset ui
     state.ui.saleCart = {};
     state.ui.saleDiscount = 0;
     state.ui.saleExtra = 0;
     state.ui.saleReceived = 0;
     state.ui.salePay = "pix";
+
     persist();
     toast("Venda registrada ✅", "success");
     renderSale(root);
@@ -359,49 +516,73 @@ function renderSale(root) {
 
 function renderProductAddRow(product, cart) {
   const qty = cart[product.id] || 0;
-  return `<div class="proditem">
+
+  return `
+    <div class="proditem">
       <div class="prodmeta">
         <b>${escapeHtml(product.nome)}</b>
         <span>Venda: ${brl(product.preco)} | Custo: ${brl(product.custo)}</span>
       </div>
+
       <div class="qty">
-        <button class="qbtn" data-prod="${product.id}" data-op="minus">−</button>
+        <button class="qbtn" data-prod="${product.id}" data-op="minus" type="button">−</button>
         <div class="qnum">${qty}</div>
-        <button class="qbtn" data-prod="${product.id}" data-op="plus">+</button>
+        <button class="qbtn" data-prod="${product.id}" data-op="plus" type="button">+</button>
       </div>
-    </div>`;
+    </div>
+  `;
 }
 
+/* =========================================================
+   ORDERS
+========================================================= */
 function renderOrders(root) {
   const orders = state.orders || [];
-  const html = `<div class="h1">📦 Encomendas</div>
+
+  const html = `
+    <div class="h1">📦 Encomendas</div>
+
     <section class="card section">
       <button class="btn btn--brand" id="btnNewOrder" style="width:100%">➕ Nova encomenda</button>
     </section>
+
     <div style="height:12px"></div>
-    ${orders.length === 0 ? `<section class="card section">
+
+    ${
+      orders.length === 0
+        ? `
+      <section class="card section">
         <div class="empty-state">
           <div class="empty-state__icon">📭</div>
           <div class="empty-state__title">Nenhuma encomenda</div>
           <div class="empty-state__description">Crie sua primeira encomenda para começar.</div>
         </div>
-      </section>` : `<section class="card">
-        ${orders.map(o => renderOrderRow(o)).join("")}
-      </section>`}`;
+      </section>
+    `
+        : `
+      <section class="card">
+        ${orders.map((o) => renderOrderRow(o)).join("")}
+      </section>
+    `
+    }
+  `;
 
   root.innerHTML = html;
+
   qs("#btnNewOrder")?.addEventListener("click", () => showOrderModal(null, root));
-  qsa("[data-order-id]").forEach(btn => {
+
+  qsa("[data-order-id]").forEach((btn) => {
     btn.addEventListener("click", () => {
       const oid = btn.dataset.orderId;
       const action = btn.dataset.action;
-      if (action === "edit") {
-        showOrderModal(oid, root);
-      } else if (action === "delete") {
+
+      if (action === "edit") showOrderModal(oid, root);
+
+      if (action === "delete") {
         if (confirm("Deletar encomenda?")) {
-          state.orders = state.orders.filter(o => o.id !== oid);
+          state.orders = state.orders.filter((o) => o.id !== oid);
           persist();
-          toast("Deletado ✅", "success");
+          toast("Encomenda deletada ✅", "success");
           renderOrders(root);
         }
       }
@@ -410,109 +591,106 @@ function renderOrders(root) {
 }
 
 function renderOrderRow(order) {
-  const statusBadge = {
-    aberta: "badge--warn",
-    entregue: "badge--good",
-    cancelada: "badge--bad"
-  }[order.status || "aberta"] || "badge--info";
-  const items = order.items || [];
-  const itemsStr = items.map(i => `${i.qty}x ${i.name}`).join(", ");
-  return `<div class="row">
+  const status = order.status || "aberta";
+  const statusIcon = status === "entregue" ? "✅" : status === "cancelada" ? "❌" : "⏳";
+
+  return `
+    <div class="row">
       <div class="kpi">
         <b>${escapeHtml(order.cliente || "Sem nome")}</b>
-        <span>${itemsStr || "Sem itens"}</span>
+        <span>${statusIcon} ${escapeHtml(status)} | Total: ${brl(order.total || 0)} | Lucro: ${brl(order.lucroEstimado || 0)}</span>
       </div>
-      <div style="display:flex;gap:8px;align-items:center">
-        <div class="badge ${statusBadge}">${order.status || "aberta"}</div>
-        <button class="btn btn--small" data-order-id="${order.id}" data-action="edit">✏️</button>
-        <button class="btn btn--small btn--danger" data-order-id="${order.id}" data-action="delete">🗑️</button>
+
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <button class="btn btn--small" data-order-id="${order.id}" data-action="edit" type="button">Editar</button>
+        <button class="btn btn--small btn--danger" data-order-id="${order.id}" data-action="delete" type="button">Deletar</button>
       </div>
-    </div>`;
+    </div>
+  `;
 }
 
 function showOrderModal(orderId, root) {
-  const order = orderId ? (state.orders || []).find(o => o.id === orderId) : null;
-  const isEdit = !!order;
   const products = state.products || [];
-  const itemsById = order?.itemsById || state.ui.orderDraftItems || {};
+  const order = orderId ? state.orders.find((o) => o.id === orderId) : null;
+  const isEdit = !!order;
+
+  const itemsById = isEdit ? order.itemsById || {} : state.ui.orderDraftItems || {};
+
   const items = cartToItems(itemsById, products);
   const subtotal = items.reduce((a, i) => a + i.qty * i.unitPrice, 0);
   const totalCusto = items.reduce((a, i) => a + i.qty * i.unitCost, 0);
-  const taxa = Number(order?.taxaEntrega || 0);
-  const sinal = Number(order?.sinal || 0);
-  const total = subtotal + taxa;
 
-  const html = `<div class="modal">
+  const taxaEntregaBase = Number(order?.taxaEntrega || 0);
+  const sinalBase = Number(order?.sinal || 0);
+  const total = subtotal + taxaEntregaBase;
+
+  const html = `
+    <div class="modal">
       <div class="modal__content">
         <div class="modal__header">
           <div class="modal__title">${isEdit ? "Editar encomenda" : "Nova encomenda"}</div>
-          <button class="modal__close" id="closeModal">X</button>
+          <button class="modal__close" id="closeModal" type="button">X</button>
         </div>
+
         <div class="field">
           <label class="label">Nome do cliente</label>
           <input type="text" class="input" id="inpCliente" placeholder="Ex: Maria Silva" value="${escapeHtml(order?.cliente || "")}" />
         </div>
+
         <div class="field mt-12">
           <label class="label">WhatsApp (opcional)</label>
-          <input type="text" class="input" id="inpWhats" placeholder="11 99999-9999" value="${escapeHtml(order?.whats || "")}" />
+          <input type="text" class="input" id="inpWhats" placeholder="Ex: 11999999999" value="${escapeHtml(order?.whats || "")}" />
         </div>
+
         <div class="field mt-12">
           <label class="label">Data de retirada</label>
-          <input type="date" class="input" id="inpData" value="${order?.dataRetirada || new Date().toISOString().slice(0, 10)}" />
+          <input type="date" class="input" id="inpData" value="${escapeHtml(order?.dataRetirada || "")}" />
         </div>
-        <div class="field mt-12">
-          <label class="label">Produtos</label>
-          <div class="productlist">
-            ${products.map(p => {
-              const q = itemsById[p.id] || 0;
-              return `<div class="proditem">
-                  <div class="prodmeta">
-                    <b>${escapeHtml(p.nome)}</b>
-                    <span>${brl(p.preco)}</span>
-                  </div>
-                  <div class="qty">
-                    <button class="qbtn" data-prod="${p.id}" data-op="minus">−</button>
-                    <div class="qnum">${q}</div>
-                    <button class="qbtn" data-prod="${p.id}" data-op="plus">+</button>
-                  </div>
-                </div>`;
-            }).join("")}
-          </div>
-        </div>
+
         <div class="field mt-12">
           <label class="label">Taxa de entrega</label>
-          <input type="number" class="input" id="inpTaxa" placeholder="0,00" value="${formatMoneyInput(taxa)}" />
+          <input type="number" class="input" id="inpTaxa" placeholder="0,00" value="${formatMoneyInput(taxaEntregaBase)}" />
         </div>
+
+        <div style="font-weight:900;margin-top:16px;margin-bottom:10px">📦 Produtos</div>
+        ${
+          products.length === 0
+            ? `<div class="muted">Cadastre produtos para montar encomendas.</div>`
+            : `<div class="productlist">
+                ${products.map((p) => renderOrderProductRow(p, itemsById)).join("")}
+              </div>`
+        }
+
+        <div class="carttotal" style="margin-top:16px">
+          <div class="kpi"><b>Subtotal</b></div>
+          <div class="big" style="color:var(--brand)">${brl(subtotal)}</div>
+        </div>
+
+        <div class="carttotal">
+          <div class="kpi"><b>Custo total</b></div>
+          <div class="value">${brl(totalCusto)}</div>
+        </div>
+
         <div class="field mt-12">
           <label class="label">Sinal</label>
-          <input type="number" class="input" id="inpSinal" placeholder="0,00" value="${formatMoneyInput(sinal)}" />
+          <input type="number" class="input" id="inpSinal" placeholder="0,00" value="${formatMoneyInput(sinalBase)}" />
         </div>
-        <div class="card section" style="background:rgba(255,79,163,0.08);border-color:rgba(255,79,163,0.25);margin-top:12px">
-          <div class="row">
-            <div class="kpi"><b>Subtotal</b></div>
-            <div class="value">${brl(subtotal)}</div>
-          </div>
-          <div class="row">
-            <div class="kpi"><b>Taxa entrega</b></div>
-            <div class="value">${brl(taxa)}</div>
-          </div>
-          <div class="carttotal">
-            <div class="kpi"><b>Total</b></div>
-            <div class="big" style="color:var(--brand)">${brl(total)}</div>
-          </div>
-          <div class="carttotal">
-            <div class="kpi"><b>Sinal</b></div>
-            <div class="value">${brl(sinal)}</div>
-          </div>
-          <div class="carttotal">
-            <div class="kpi"><b>Restante</b></div>
-            <div class="big" style="color:var(--warn)">${brl(total - sinal)}</div>
-          </div>
-          <div class="carttotal">
-            <div class="kpi"><b>Lucro estimado</b></div>
-            <div class="big" style="color:var(--good)">${brl(calcProfit(total, totalCusto, 0))}</div>
-          </div>
+
+        <div class="carttotal">
+          <div class="kpi"><b>Total</b></div>
+          <div class="big" style="color:var(--brand)">${brl(total)}</div>
         </div>
+
+        <div class="carttotal">
+          <div class="kpi"><b>Restante</b></div>
+          <div class="big" style="color:var(--warn)">${brl(Math.max(0, total - sinalBase))}</div>
+        </div>
+
+        <div class="carttotal">
+          <div class="kpi"><b>Lucro estimado</b></div>
+          <div class="big" style="color:var(--good)">${brl(calcProfit(total, totalCusto, 0))}</div>
+        </div>
+
         <div class="field mt-12">
           <label class="label">Status</label>
           <select class="select" id="selStatus">
@@ -521,28 +699,41 @@ function showOrderModal(orderId, root) {
             <option value="cancelada" ${order?.status === "cancelada" ? "selected" : ""}>Cancelada</option>
           </select>
         </div>
+
         <div style="height:12px"></div>
-        <button class="btn btn--brand" id="btnSaveOrder" style="width:100%">Salvar encomenda</button>
-        ${isEdit ? `<div style="height:8px"></div><button class="btn btn--danger" id="btnDeleteOrder" style="width:100%">Deletar encomenda</button>` : ""}
+        <button class="btn btn--brand" id="btnSaveOrder" style="width:100%" type="button">Salvar encomenda</button>
+
+        ${
+          isEdit
+            ? `
+          <div style="height:8px"></div>
+          <button class="btn btn--danger" id="btnDeleteOrder" style="width:100%" type="button">Deletar encomenda</button>
+        `
+            : ""
+        }
       </div>
-    </div>`;
+    </div>
+  `;
 
   const container = qs("#modalContainer");
   container.innerHTML = html;
+
   const modal = qs(".modal");
-  const closeBtn = qs("#closeModal");
-  closeBtn?.addEventListener("click", () => modal.remove());
+  qs("#closeModal")?.addEventListener("click", () => modal?.remove());
   modal?.addEventListener("click", (e) => {
     if (e.target === modal) modal.remove();
   });
 
-  qsa("[data-op]").forEach(btn => {
+  // botões + e -
+  qsa("[data-op]").forEach((btn) => {
     btn.addEventListener("click", () => {
       const prodId = btn.dataset.prod;
       const op = btn.dataset.op;
       const q = itemsById[prodId] || 0;
+
       itemsById[prodId] = op === "plus" ? q + 1 : Math.max(0, q - 1);
       if (itemsById[prodId] === 0) delete itemsById[prodId];
+
       state.ui.orderDraftItems = itemsById;
       persist();
       showOrderModal(orderId, root);
@@ -550,12 +741,12 @@ function showOrderModal(orderId, root) {
   });
 
   qs("#btnSaveOrder")?.addEventListener("click", () => {
-    const cliente = qs("#inpCliente").value.trim();
-    const whats = qs("#inpWhats").value.trim();
-    const dataRetirada = qs("#inpData").value;
-    const taxaEntrega = parseMoneyInput(qs("#inpTaxa").value);
-    const sinal = parseMoneyInput(qs("#inpSinal").value);
-    const status = qs("#selStatus").value;
+    const cliente = (qs("#inpCliente")?.value || "").trim();
+    const whats = (qs("#inpWhats")?.value || "").trim();
+    const dataRetirada = qs("#inpData")?.value || "";
+    const taxaEntrega = parseMoneyInput(qs("#inpTaxa")?.value || "0");
+    const sinal = parseMoneyInput(qs("#inpSinal")?.value || "0");
+    const status = qs("#selStatus")?.value || "aberta";
 
     if (!cliente) {
       toast("Preencha o nome do cliente", "error");
@@ -572,7 +763,7 @@ function showOrderModal(orderId, root) {
     const total = subtotal + taxaEntrega;
 
     if (isEdit) {
-      const idx = state.orders.findIndex(o => o.id === orderId);
+      const idx = state.orders.findIndex((o) => o.id === orderId);
       if (idx >= 0) {
         state.orders[idx] = {
           ...order,
@@ -586,7 +777,7 @@ function showOrderModal(orderId, root) {
           items,
           total,
           totalCusto,
-          lucroEstimado: calcProfit(total, totalCusto, 0)
+          lucroEstimado: calcProfit(total, totalCusto, 0),
         };
       }
     } else {
@@ -603,7 +794,7 @@ function showOrderModal(orderId, root) {
         items,
         total,
         totalCusto,
-        lucroEstimado: calcProfit(total, totalCusto, 0)
+        lucroEstimado: calcProfit(total, totalCusto, 0),
       });
     }
 
@@ -616,7 +807,7 @@ function showOrderModal(orderId, root) {
 
   qs("#btnDeleteOrder")?.addEventListener("click", () => {
     if (confirm("Tem certeza que quer deletar esta encomenda?")) {
-      state.orders = state.orders.filter(o => o.id !== orderId);
+      state.orders = state.orders.filter((o) => o.id !== orderId);
       persist();
       modal.remove();
       toast("Encomenda deletada ✅", "success");
@@ -625,34 +816,73 @@ function showOrderModal(orderId, root) {
   });
 }
 
+function renderOrderProductRow(product, itemsById) {
+  const qty = itemsById[product.id] || 0;
+
+  return `
+    <div class="proditem">
+      <div class="prodmeta">
+        <b>${escapeHtml(product.nome)}</b>
+        <span>Venda: ${brl(product.preco)} | Custo: ${brl(product.custo)}</span>
+      </div>
+
+      <div class="qty">
+        <button class="qbtn" data-prod="${product.id}" data-op="minus" type="button">−</button>
+        <div class="qnum">${qty}</div>
+        <button class="qbtn" data-prod="${product.id}" data-op="plus" type="button">+</button>
+      </div>
+    </div>
+  `;
+}
+
+/* =========================================================
+   PRODUCTS
+========================================================= */
 function renderProducts(root) {
   const products = state.products || [];
-  const html = `<div class="h1">Produtos</div>
+
+  const html = `
+    <div class="h1">🎂 Produtos</div>
+
     <section class="card section">
-      <button class="btn btn--brand" id="btnNewProduct" style="width:100%">Novo produto</button>
+      <button class="btn btn--brand" id="btnNewProduct" style="width:100%" type="button">➕ Novo produto</button>
     </section>
+
     <div style="height:12px"></div>
-    ${products.length === 0 ? `<section class="card section">
+
+    ${
+      products.length === 0
+        ? `
+      <section class="card section">
         <div class="empty-state">
-          <div class="empty-state__icon">Sem produtos</div>
+          <div class="empty-state__icon">📦</div>
           <div class="empty-state__title">Nenhum produto</div>
           <div class="empty-state__description">Crie seu primeiro produto para começar a vender.</div>
         </div>
-      </section>` : `<section class="card">
-        ${products.map(p => renderProductRow(p)).join("")}
-      </section>`}`;
+      </section>
+    `
+        : `
+      <section class="card">
+        ${products.map((p) => renderProductRow(p)).join("")}
+      </section>
+    `
+    }
+  `;
 
   root.innerHTML = html;
+
   qs("#btnNewProduct")?.addEventListener("click", () => showProductModal(null, root));
-  qsa("[data-prod-id]").forEach(btn => {
+
+  qsa("[data-prod-id]").forEach((btn) => {
     btn.addEventListener("click", () => {
       const pid = btn.dataset.prodId;
       const action = btn.dataset.action;
-      if (action === "edit") {
-        showProductModal(pid, root);
-      } else if (action === "delete") {
+
+      if (action === "edit") showProductModal(pid, root);
+
+      if (action === "delete") {
         if (confirm("Deletar produto?")) {
-          state.products = state.products.filter(p => p.id !== pid);
+          state.products = state.products.filter((p) => p.id !== pid);
           persist();
           toast("Produto deletado ✅", "success");
           renderProducts(root);
@@ -663,60 +893,83 @@ function renderProducts(root) {
 }
 
 function renderProductRow(product) {
-  const margin = calcMarginPercentLocal(product.preco, product.custo);
-  return `<div class="row">
+  const margin = Math.round(calcMargin(Number(product.preco || 0), Number(product.custo || 0)));
+  const lucroUn = Number(product.preco || 0) - Number(product.custo || 0);
+  const roi = Math.round(calcROI(lucroUn, Number(product.custo || 0)));
+
+  return `
+    <div class="row">
       <div class="kpi">
         <b>${escapeHtml(product.nome)}</b>
-        <span>Venda: ${brl(product.preco)} | Custo: ${brl(product.custo)} | Margem: ${margin}%</span>
+        <span>
+          Venda: ${brl(product.preco)} | Custo: ${brl(product.custo)} | Margem: ${margin}% | ROI: ${roi}%
+        </span>
       </div>
-      <div style="display:flex;gap:8px">
-        <button class="btn btn--small" data-prod-id="${product.id}" data-action="edit">Editar</button>
-        <button class="btn btn--small btn--danger" data-prod-id="${product.id}" data-action="delete">Deletar</button>
+
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <button class="btn btn--small" data-prod-id="${product.id}" data-action="edit" type="button">Editar</button>
+        <button class="btn btn--small btn--danger" data-prod-id="${product.id}" data-action="delete" type="button">Deletar</button>
       </div>
-    </div>`;
+    </div>
+  `;
 }
 
 function showProductModal(productId, root) {
-  const product = productId ? state.products.find(p => p.id === productId) : null;
+  const product = productId ? state.products.find((p) => p.id === productId) : null;
   const isEdit = !!product;
 
-  const html = `<div class="modal">
+  const html = `
+    <div class="modal">
       <div class="modal__content">
         <div class="modal__header">
           <div class="modal__title">${isEdit ? "Editar produto" : "Novo produto"}</div>
-          <button class="modal__close" id="closeModal">X</button>
+          <button class="modal__close" id="closeModal" type="button">X</button>
         </div>
+
         <div class="field">
           <label class="label">Nome do produto</label>
           <input type="text" class="input" id="inpNome" placeholder="Ex: Bolo no pote" value="${escapeHtml(product?.nome || "")}" />
         </div>
+
         <div class="fieldgrid mt-12">
           <div class="field">
-            <label class="label">Preco de venda</label>
+            <label class="label">Preço de venda</label>
             <input type="number" class="input" id="inpPreco" placeholder="0,00" value="${formatMoneyInput(product?.preco || 0)}" />
           </div>
+
           <div class="field">
-            <label class="label">Custo unitario</label>
+            <label class="label">Custo unitário</label>
             <input type="number" class="input" id="inpCusto" placeholder="0,00" value="${formatMoneyInput(product?.custo || 0)}" />
           </div>
         </div>
+
         <div class="card section" style="background:rgba(46,229,157,0.08);border-color:rgba(46,229,157,0.25);margin-top:12px">
           <div class="row">
             <div class="kpi"><b>Margem</b><span>Lucro por unidade</span></div>
             <div class="value" id="marginDisplay">0%</div>
           </div>
         </div>
+
         <div style="height:12px"></div>
-        <button class="btn btn--brand" id="btnSaveProduct" style="width:100%">Salvar produto</button>
-        ${isEdit ? `<div style="height:8px"></div><button class="btn btn--danger" id="btnDeleteProduct" style="width:100%">Deletar produto</button>` : ""}
+        <button class="btn btn--brand" id="btnSaveProduct" style="width:100%" type="button">Salvar produto</button>
+
+        ${
+          isEdit
+            ? `
+          <div style="height:8px"></div>
+          <button class="btn btn--danger" id="btnDeleteProduct" style="width:100%" type="button">Deletar produto</button>
+        `
+            : ""
+        }
       </div>
-    </div>`;
+    </div>
+  `;
 
   const container = qs("#modalContainer");
   container.innerHTML = html;
+
   const modal = qs(".modal");
-  const closeBtn = qs("#closeModal");
-  closeBtn?.addEventListener("click", () => modal.remove());
+  qs("#closeModal")?.addEventListener("click", () => modal.remove());
   modal?.addEventListener("click", (e) => {
     if (e.target === modal) modal.remove();
   });
@@ -725,48 +978,31 @@ function showProductModal(productId, root) {
   const inpCusto = qs("#inpCusto");
   const marginDisplay = qs("#marginDisplay");
 
-  function updateMargin() {
-    const preco = parseMoneyInput(inpPreco.value);
-    const custo = parseMoneyInput(inpCusto.value);
-    const margin = calcMarginPercentLocal(preco, custo);
-    marginDisplay.textContent = margin + "%";
-  }
+  const updateMargin = () => {
+    const preco = parseMoneyInput(inpPreco?.value || "0");
+    const custo = parseMoneyInput(inpCusto?.value || "0");
+    const margin = Math.round(calcMargin(preco, custo));
+    marginDisplay.textContent = `${margin}%`;
+  };
 
   inpPreco?.addEventListener("input", updateMargin);
   inpCusto?.addEventListener("input", updateMargin);
   updateMargin();
 
   qs("#btnSaveProduct")?.addEventListener("click", () => {
-    const nome = qs("#inpNome").value.trim();
-    const preco = parseMoneyInput(qs("#inpPreco").value);
-    const custo = parseMoneyInput(qs("#inpCusto").value);
+    const nome = (qs("#inpNome")?.value || "").trim();
+    const preco = parseMoneyInput(qs("#inpPreco")?.value || "0");
+    const custo = parseMoneyInput(qs("#inpCusto")?.value || "0");
 
-    if (!nome) {
-      toast("Preencha o nome do produto", "error");
-      return;
-    }
-    if (!Number.isFinite(preco) || preco <= 0) {
-      toast("Preco invalido", "error");
-      return;
-    }
-    if (!Number.isFinite(custo) || custo < 0) {
-      toast("Custo invalido", "error");
-      return;
-    }
+    if (!nome) return toast("Preencha o nome do produto", "error");
+    if (!Number.isFinite(preco) || preco <= 0) return toast("Preço inválido", "error");
+    if (!Number.isFinite(custo) || custo < 0) return toast("Custo inválido", "error");
 
     if (isEdit) {
-      const idx = state.products.findIndex(p => p.id === productId);
-      if (idx >= 0) {
-        state.products[idx] = { ...product, nome, preco, custo };
-      }
+      const idx = state.products.findIndex((p) => p.id === productId);
+      if (idx >= 0) state.products[idx] = { ...product, nome, preco, custo };
     } else {
-      state.products.push({
-        id: newId(),
-        nome,
-        preco,
-        custo,
-        createdAt: new Date().toISOString()
-      });
+      state.products.push({ id: newId(), nome, preco, custo });
     }
 
     persist();
@@ -777,7 +1013,7 @@ function showProductModal(productId, root) {
 
   qs("#btnDeleteProduct")?.addEventListener("click", () => {
     if (confirm("Deletar produto?")) {
-      state.products = state.products.filter(p => p.id !== productId);
+      state.products = state.products.filter((p) => p.id !== productId);
       persist();
       modal.remove();
       toast("Produto deletado ✅", "success");
@@ -786,532 +1022,526 @@ function showProductModal(productId, root) {
   });
 }
 
+/* =========================================================
+   REPORTS
+========================================================= */
 function renderReports(root) {
-  const month = getMonthSummary();
-  const week = getLast7DaysSummary();
-  const topProducts = getTopProducts(5);
+  const sales = state.sales || [];
+  const orders = state.orders || [];
 
-  const html = `<div class="h1">Relatorios</div>
+  const today = getTodaySummary();
+  const month = getMonthSummary();
+  const year = getYearSummary();
+
+  const html = `
+    <div class="h1">📈 Relatórios</div>
+
     <section class="card section">
-      <div style="font-weight:900;margin-bottom:10px">Grafico: Faturamento vs Lucro (7 dias)</div>
-      <div class="chart-container">
-        <canvas id="chartWeek"></canvas>
+      <div style="font-weight:900;margin-bottom:10px">📊 Resumo de vendas</div>
+
+      <div class="row">
+        <div class="kpi"><b>Vendas hoje</b><span>Quantidade</span></div>
+        <div class="badge">${sales.filter((s) => s.date === todayKey()).length}</div>
+      </div>
+
+      <div class="row">
+        <div class="kpi"><b>Faturamento hoje</b><span>Total</span></div>
+        <div class="badge">${brl(today.faturamento)}</div>
+      </div>
+
+      <div class="row">
+        <div class="kpi"><b>Lucro hoje</b><span>Real</span></div>
+        <div class="badge badge--good">${brl(today.lucro)}</div>
       </div>
     </section>
+
     <div style="height:12px"></div>
+
     <section class="card section">
-      <div style="font-weight:900;margin-bottom:8px">Resumo do mes</div>
+      <div style="font-weight:900;margin-bottom:10px">📅 Resumo do mês</div>
+
       <div class="row">
-        <div class="kpi"><b>Faturamento</b></div>
-        <div class="value">${brl(month.faturamento)}</div>
+        <div class="kpi"><b>Vendas mês</b><span>Quantidade</span></div>
+        <div class="badge">${sales.filter((s) => String(s.date || "").startsWith(monthKey())).length}</div>
       </div>
+
       <div class="row">
-        <div class="kpi"><b>Custo total</b></div>
-        <div class="value">${brl(month.custos)}</div>
+        <div class="kpi"><b>Faturamento mês</b><span>Total</span></div>
+        <div class="badge">${brl(month.faturamento)}</div>
       </div>
+
       <div class="row">
-        <div class="kpi"><b>Taxas</b></div>
-        <div class="value">${brl(month.taxas)}</div>
-      </div>
-      <div class="row">
-        <div class="kpi"><b>Lucro real</b></div>
-        <div class="value" style="color:var(--good)">${brl(month.lucro)}</div>
+        <div class="kpi"><b>Lucro mês</b><span>Real</span></div>
+        <div class="badge badge--good">${brl(month.lucro)}</div>
       </div>
     </section>
+
     <div style="height:12px"></div>
+
     <section class="card section">
-      <div style="font-weight:900;margin-bottom:8px">Top 5 produtos</div>
-      ${topProducts.length === 0 ? `<div class="muted">Sem vendas ainda</div>` : `
-        ${topProducts.map((p, i) => `
-          <div class="row">
-            <div class="kpi">
-              <b>${i + 1}. ${escapeHtml(p.nome)}</b>
-              <span>${p.qty} vendidos | Lucro: ${brl(p.lucro)}</span>
-            </div>
-            <div class="value">${brl(p.revenue)}</div>
-          </div>
-        `).join("")}
-      `}
+      <div style="font-weight:900;margin-bottom:10px">📈 Resumo do ano</div>
+
+      <div class="row">
+        <div class="kpi"><b>Vendas ano</b><span>Quantidade</span></div>
+        <div class="badge">${sales.filter((s) => String(s.date || "").startsWith(yearKey())).length}</div>
+      </div>
+
+      <div class="row">
+        <div class="kpi"><b>Faturamento ano</b><span>Total</span></div>
+        <div class="badge">${brl(year.faturamento)}</div>
+      </div>
+
+      <div class="row">
+        <div class="kpi"><b>Lucro ano</b><span>Real</span></div>
+        <div class="badge badge--good">${brl(year.lucro)}</div>
+      </div>
     </section>
+
     <div style="height:12px"></div>
+
     <section class="card section">
-      <div style="font-weight:900;margin-bottom:8px">Ultimas vendas</div>
-      <table class="table">
-        <thead>
-          <tr>
-            <th>Data</th>
-            <th>Metodo</th>
-            <th>Venda</th>
-            <th>Lucro</th>
-          </tr>
-        </thead>
-        <tbody>
-          ${(state.sales || []).slice(-10).reverse().map(s => `
-            <tr>
-              <td>${s.date}</td>
-              <td>${s.metodo}</td>
-              <td>${brl(s.totalVenda)}</td>
-              <td style="color:var(--good)">${brl(s.lucro)}</td>
-            </tr>
-          `).join("")}
-        </tbody>
-      </table>
-    </section>`;
+      <div style="font-weight:900;margin-bottom:10px">📦 Encomendas</div>
+
+      <div class="row">
+        <div class="kpi"><b>Total de encomendas</b><span>Todas</span></div>
+        <div class="badge">${orders.length}</div>
+      </div>
+
+      <div class="row">
+        <div class="kpi"><b>Abertas</b><span>Aguardando</span></div>
+        <div class="badge badge--warn">${orders.filter((o) => o.status === "aberta").length}</div>
+      </div>
+
+      <div class="row">
+        <div class="kpi"><b>Entregues</b><span>Concluídas</span></div>
+        <div class="badge badge--good">${orders.filter((o) => o.status === "entregue").length}</div>
+      </div>
+
+      <div class="row">
+        <div class="kpi"><b>Canceladas</b><span>Perdidas</span></div>
+        <div class="badge badge--bad">${orders.filter((o) => o.status === "cancelada").length}</div>
+      </div>
+    </section>
+  `;
+
+  root.innerHTML = html;
+}
+
+/* =========================================================
+   MORE
+========================================================= */
+function renderMore(root) {
+  const html = `
+    <div class="h1">⚙️ Mais</div>
+
+    <section class="card section">
+      <button class="btn btn--brand" id="btnExportData" style="width:100%" type="button">📥 Exportar dados (JSON)</button>
+      <div style="height:8px"></div>
+      <button class="btn" id="btnImportData" style="width:100%" type="button">📤 Importar dados (JSON)</button>
+      <div style="height:8px"></div>
+      <button class="btn btn--danger" id="btnClearData" style="width:100%" type="button">🗑️ Limpar todos os dados</button>
+    </section>
+
+    <div style="height:12px"></div>
+
+    <section class="card section">
+      <div style="font-weight:900;margin-bottom:10px">ℹ️ Sobre</div>
+      <div class="row">
+        <div class="kpi"><b>Doce Lucro</b><span>v1.0.1</span></div>
+      </div>
+      <div class="row">
+        <div class="kpi"><b>Armazenamento</b><span>Local (offline)</span></div>
+      </div>
+    </section>
+  `;
 
   root.innerHTML = html;
 
-  setTimeout(() => {
-    const ctx = qs("#chartWeek");
-    if (ctx && window.Chart) {
-      if (chartInstances.week) chartInstances.week.destroy();
-      const labels = week.map(w => w.dia);
-      const faturamento = week.map(w => w.faturamento);
-      const lucro = week.map(w => w.lucro);
+  qs("#btnExportData")?.addEventListener("click", () => {
+    const dataStr = JSON.stringify(state, null, 2);
+    const blob = new Blob([dataStr], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
 
-      chartInstances.week = new window.Chart(ctx, {
-        type: "line",
-        data: {
-          labels,
-          datasets: [
-            {
-              label: "Faturamento",
-              data: faturamento,
-              borderColor: "rgba(255, 79, 163, 0.8)",
-              backgroundColor: "rgba(255, 79, 163, 0.1)",
-              tension: 0.4,
-              fill: true,
-              pointRadius: 5,
-              pointBackgroundColor: "rgba(255, 79, 163, 1)"
-            },
-            {
-              label: "Lucro",
-              data: lucro,
-              borderColor: "rgba(46, 229, 157, 0.8)",
-              backgroundColor: "rgba(46, 229, 157, 0.1)",
-              tension: 0.4,
-              fill: true,
-              pointRadius: 5,
-              pointBackgroundColor: "rgba(46, 229, 157, 1)"
-            }
-          ]
-        },
-        options: {
-          responsive: true,
-          maintainAspectRatio: false,
-          plugins: {
-            legend: {
-              labels: {
-                color: state.theme === "light" ? "rgba(0,0,0,0.7)" : "rgba(255,255,255,0.7)",
-                font: { weight: "bold" }
-              }
-            }
-          },
-          scales: {
-            y: {
-              ticks: {
-                color: state.theme === "light" ? "rgba(0,0,0,0.5)" : "rgba(255,255,255,0.5)",
-                callback: (v) => "R$ " + (v / 1000).toFixed(1) + "k"
-              },
-              grid: {
-                color: state.theme === "light" ? "rgba(0,0,0,0.05)" : "rgba(255,255,255,0.05)"
-              }
-            },
-            x: {
-              ticks: {
-                color: state.theme === "light" ? "rgba(0,0,0,0.5)" : "rgba(255,255,255,0.5)"
-              },
-              grid: {
-                color: state.theme === "light" ? "rgba(0,0,0,0.05)" : "rgba(255,255,255,0.05)"
-              }
-            }
-          }
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `doce-lucro-backup-${new Date().toISOString().slice(0, 10)}.json`;
+    a.click();
+
+    URL.revokeObjectURL(url);
+    toast("Dados exportados ✅", "success");
+  });
+
+  qs("#btnImportData")?.addEventListener("click", () => {
+    const input = document.createElement("input");
+    input.type = "file";
+    input.accept = ".json";
+
+    input.onchange = (e) => {
+      const file = e.target.files?.[0];
+      if (!file) return;
+
+      const reader = new FileReader();
+      reader.onload = (event) => {
+        try {
+          const imported = JSON.parse(String(event.target.result || "{}"));
+          state = normalizeState({ ...state, ...imported });
+          persist();
+          toast("Dados importados ✅", "success");
+          renderMore(root);
+        } catch (err) {
+          toast("Erro ao importar arquivo", "error");
         }
-      });
-    }
-  }, 100);
-}
+      };
 
-function renderMore(root) {
-  root.innerHTML = `<div class="h1">Mais</div>
-    <section class="card section">
-      <button class="btn" id="btnClearAll" style="width:100%">Limpar todos os dados</button>
-      <div style="height:8px"></div>
-      <button class="btn" id="btnAbout" style="width:100%">Sobre o Doce Lucro</button>
-    </section>`;
+      reader.readAsText(file);
+    };
 
-  qs("#btnClearAll")?.addEventListener("click", () => {
-    if (confirm("Tem certeza? Isso vai deletar TODOS os dados!")) {
-      if (confirm("Confirmacao final: deletar tudo mesmo?")) {
-        state = getDefaultState();
-        persist();
-        toast("Dados apagados ✅", "success");
-        renderMore(root);
-      }
-    }
+    input.click();
   });
 
-  qs("#btnAbout")?.addEventListener("click", () => {
-    toast("Doce Lucro v1.0 - Lucro real em segundos", "info");
+  qs("#btnClearData")?.addEventListener("click", () => {
+    if (confirm("⚠️ Tem certeza? Isso vai DELETAR TODOS os dados!")) {
+      state = normalizeState(getDefaultState());
+      persist();
+      toast("Dados limpos ✅", "success");
+      renderMore(root);
+    }
   });
 }
 
+/* =========================================================
+   EXPORT MODAL
+========================================================= */
 function showExportModal() {
-  const html = `<div class="modal">
+  const html = `
+    <div class="modal">
       <div class="modal__content">
         <div class="modal__header">
-          <div class="modal__title">Exportar dados</div>
-          <button class="modal__close" id="closeModal">X</button>
+          <div class="modal__title">📊 Exportar relatório</div>
+          <button class="modal__close" id="closeModal" type="button">X</button>
         </div>
-        <button class="btn btn--brand" id="btnExportCSV" style="width:100%;margin-bottom:8px">Exportar CSV</button>
-        <button class="btn" id="btnExportJSON" style="width:100%;margin-bottom:8px">Exportar JSON</button>
-        <button class="btn" id="btnExportPDF" style="width:100%">Exportar PDF</button>
+
+        <div class="field">
+          <label class="label">Escolha o formato</label>
+          <button class="btn btn--brand" id="btnExportJSON" style="width:100%;margin-bottom:8px" type="button">📥 JSON (Backup)</button>
+          <button class="btn" id="btnExportCSV" style="width:100%" type="button">📊 CSV (Excel)</button>
+        </div>
       </div>
-    </div>`;
+    </div>
+  `;
 
   const container = qs("#modalContainer");
   container.innerHTML = html;
+
   const modal = qs(".modal");
-  const closeBtn = qs("#closeModal");
-  closeBtn?.addEventListener("click", () => modal.remove());
+  qs("#closeModal")?.addEventListener("click", () => modal.remove());
   modal?.addEventListener("click", (e) => {
     if (e.target === modal) modal.remove();
   });
 
-  qs("#btnExportCSV")?.addEventListener("click", () => {
-    const csv = generateCSV();
-    downloadFile(csv, "doce-lucro-vendas.csv", "text/csv");
-    toast("CSV exportado ✅", "success");
-    modal.remove();
-  });
-
   qs("#btnExportJSON")?.addEventListener("click", () => {
-    const json = JSON.stringify(state, null, 2);
-    downloadFile(json, "doce-lucro-backup.json", "application/json");
-    toast("JSON exportado ✅", "success");
+    const dataStr = JSON.stringify(state, null, 2);
+    const blob = new Blob([dataStr], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `doce-lucro-backup-${new Date().toISOString().slice(0, 10)}.json`;
+    a.click();
+
+    URL.revokeObjectURL(url);
+    toast("Dados exportados ✅", "success");
     modal.remove();
   });
 
-  qs("#btnExportPDF")?.addEventListener("click", () => {
-    toast("PDF preparado para download", "info");
+  qs("#btnExportCSV")?.addEventListener("click", () => {
+    const sales = state.sales || [];
+    const rows = [
+      ["Data", "Método", "Faturamento", "Custo", "Taxa", "Lucro"].join(","),
+      ...sales.map((s) =>
+        [
+          String(s.date || ""),
+          String(s.metodo || ""),
+          Number(s.totalVenda || 0),
+          Number(s.totalCusto || 0),
+          Number(s.taxaCartao || 0),
+          Number(s.lucro || 0),
+        ].join(",")
+      ),
+    ];
+
+    const csv = rows.join("\n");
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `doce-lucro-vendas-${new Date().toISOString().slice(0, 10)}.csv`;
+    a.click();
+
+    URL.revokeObjectURL(url);
+    toast("Relatório exportado ✅", "success");
     modal.remove();
   });
 }
 
-function generateCSV() {
-  const sales = state.sales || [];
-  let csv = "Data,Metodo,Venda,Custo,Taxa,Lucro\n";
-  for (const s of sales) {
-    csv += `${s.date},${s.metodo},${s.totalVenda},${s.totalCusto},${s.taxaCartao},${s.lucro}\n`;
-  }
-  return csv;
+/* =========================================================
+   HELPERS
+========================================================= */
+function radioPill(_name, value, label, checked) {
+  return `
+    <button
+      class="pill"
+      data-pay="${escapeHtml(value)}"
+      type="button"
+      style="${checked ? "background:rgba(255,79,163,0.2);border-color:rgba(255,79,163,0.5)" : ""}"
+    >
+      ${escapeHtml(label)}
+    </button>
+  `;
 }
 
-function downloadFile(content, filename, type) {
-  const blob = new Blob([content], { type });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = filename;
-  document.body.appendChild(a);
-  a.click();
-  document.body.removeChild(a);
-  URL.revokeObjectURL(url);
+function escapeHtml(text) {
+  const map = { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#039;" };
+  return String(text ?? "").replace(/[&<>"']/g, (m) => map[m]);
 }
 
-function radioPill(name, value, label, checked) {
-  return `<button class="pill" type="button" data-pay="${value}" style="${checked ? "background:rgba(255,79,163,0.2);border-color:rgba(255,79,163,0.5)" : ""}">${label}</button>`;
+function parseMoneyInput(value) {
+  if (value === null || value === undefined) return 0;
+  const str = String(value).replace(/[^\d.,-]/g, "").replace(",", ".");
+  const num = parseFloat(str);
+  return Number.isFinite(num) ? num : 0;
+}
+
+function formatMoneyInput(value) {
+  const num = Number(value || 0);
+  return num.toFixed(2).replace(".", ",");
+}
+
+function computeCartTotals(cart, products, metodo, desconto, acrescimo) {
+  const items = cartToItems(cart, products);
+
+  const subtotal = items.reduce((a, i) => a + i.qty * i.unitPrice, 0);
+  const totalCusto = items.reduce((a, i) => a + i.qty * i.unitCost, 0);
+
+  const taxa = calcCardFee(subtotal, metodo);
+  const totalFinal = subtotal + acrescimo - desconto + taxa;
+
+  // lucro = totalFinal - custo - taxa (taxa já está dentro do totalFinal)
+  const lucro = calcProfit(totalFinal, totalCusto, taxa);
+
+  return { subtotal, totalCusto, taxa, totalFinal, lucro };
+}
+
+function cartToItems(cart, products) {
+  return Object.entries(cart || {})
+    .map(([prodId, qty]) => {
+      const prod = (products || []).find((p) => p.id === prodId);
+      if (!prod) return null;
+
+      return {
+        ...prod,
+        qty: Number(qty || 0),
+        unitPrice: Number(prod.preco || 0),
+        unitCost: Number(prod.custo || 0),
+      };
+    })
+    .filter(Boolean);
 }
 
 function todayKey() {
   return new Date().toISOString().slice(0, 10);
 }
-
 function monthKey() {
   return new Date().toISOString().slice(0, 7);
 }
-
-function getRemainingDaysInMonth() {
-  const now = new Date();
-  const lastDay = new Date(now.getFullYear(), now.getMonth() + 1, 0);
-  return lastDay.getDate() - now.getDate();
+function yearKey() {
+  return new Date().toISOString().slice(0, 4);
 }
 
 function getTodaySummary() {
-  const today = todayKey();
-  const sales = (state.sales || []).filter(s => s.date === today);
-  let faturamento = 0, custos = 0, taxas = 0, lucro = 0;
-  for (const s of sales) {
-    faturamento += Number(s.totalVenda || 0);
-    custos += Number(s.totalCusto || 0);
-    taxas += Number(s.taxaCartao || 0);
-    lucro += Number(s.lucro || 0);
-  }
+  const key = todayKey();
+  const sales = (state.sales || []).filter((s) => s.date === key);
+
+  const faturamento = sales.reduce((a, s) => a + Number(s.totalVenda || 0), 0);
+  const custos = sales.reduce((a, s) => a + Number(s.totalCusto || 0), 0);
+  const taxas = sales.reduce((a, s) => a + Number(s.taxaCartao || 0), 0);
+  const lucro = calcProfit(faturamento, custos, taxas);
+
   return { faturamento, custos, taxas, lucro };
 }
 
 function getMonthSummary() {
-  const month = monthKey();
-  const sales = (state.sales || []).filter(s => (s.date || "").startsWith(month));
-  let faturamento = 0, custos = 0, taxas = 0, lucro = 0;
-  for (const s of sales) {
-    faturamento += Number(s.totalVenda || 0);
-    custos += Number(s.totalCusto || 0);
-    taxas += Number(s.taxaCartao || 0);
-    lucro += Number(s.lucro || 0);
-  }
+  const key = monthKey();
+  const sales = (state.sales || []).filter((s) => String(s.date || "").startsWith(key));
+
+  const faturamento = sales.reduce((a, s) => a + Number(s.totalVenda || 0), 0);
+  const custos = sales.reduce((a, s) => a + Number(s.totalCusto || 0), 0);
+  const taxas = sales.reduce((a, s) => a + Number(s.taxaCartao || 0), 0);
+  const lucro = calcProfit(faturamento, custos, taxas);
+
+  return { faturamento, custos, taxas, lucro };
+}
+
+function getYearSummary() {
+  const key = yearKey();
+  const sales = (state.sales || []).filter((s) => String(s.date || "").startsWith(key));
+
+  const faturamento = sales.reduce((a, s) => a + Number(s.totalVenda || 0), 0);
+  const custos = sales.reduce((a, s) => a + Number(s.totalCusto || 0), 0);
+  const taxas = sales.reduce((a, s) => a + Number(s.taxaCartao || 0), 0);
+  const lucro = calcProfit(faturamento, custos, taxas);
+
   return { faturamento, custos, taxas, lucro };
 }
 
 function getLast7DaysSummary() {
-  const result = [];
+  const days = [];
   for (let i = 6; i >= 0; i--) {
     const d = new Date();
     d.setDate(d.getDate() - i);
-    const dateStr = d.toISOString().slice(0, 10);
-    const sales = (state.sales || []).filter(s => s.date === dateStr);
-    let faturamento = 0, custos = 0, lucro = 0;
-    for (const s of sales) {
-      faturamento += Number(s.totalVenda || 0);
-      custos += Number(s.totalCusto || 0);
-      lucro += Number(s.lucro || 0);
-    }
-    result.push({
-      dia: dateStr.slice(5),
-      date: dateStr,
-      faturamento,
-      custos,
-      lucro
-    });
-  }
-  return result;
-}
+    const key = d.toISOString().slice(0, 10);
 
-function getTopProducts(limit = 5) {
-  const products = state.products || [];
-  const sales = state.sales || [];
-  const productStats = {};
-  for (const s of sales) {
-    for (const item of (s.items || [])) {
-      if (!productStats[item.id]) {
-        productStats[item.id] = { qty: 0, revenue: 0, lucro: 0 };
-      }
-      productStats[item.id].qty += item.qty;
-      productStats[item.id].revenue += item.qty * item.unitPrice;
-      productStats[item.id].lucro += item.qty * (item.unitPrice - item.unitCost);
-    }
-  }
-  return products
-    .map(p => ({
-      ...p,
-      ...productStats[p.id]
-    }))
-    .filter(p => p.qty > 0)
-    .sort((a, b) => b.revenue - a.revenue)
-    .slice(0, limit);
-}
+    const sales = (state.sales || []).filter((s) => s.date === key);
+    const faturamento = sales.reduce((a, s) => a + Number(s.totalVenda || 0), 0);
+    const custos = sales.reduce((a, s) => a + Number(s.totalCusto || 0), 0);
+    const taxas = sales.reduce((a, s) => a + Number(s.taxaCartao || 0), 0);
+    const lucro = calcProfit(faturamento, custos, taxas);
 
-function computeCartTotals(cart, products, metodo, desconto, acrescimo) {
-  let subtotal = 0, totalCusto = 0;
-  for (const [prodId, qty] of Object.entries(cart)) {
-    const p = products.find(x => x.id === prodId);
-    if (p) {
-      subtotal += qty * p.preco;
-      totalCusto += qty * p.custo;
-    }
+    days.push({ date: key, faturamento, custos, taxas, lucro });
   }
-  const taxa = calcCardFee(subtotal, metodo);
-  const totalFinal = subtotal + taxa + acrescimo - desconto;
-  const lucro = totalFinal - totalCusto - taxa;
-  return { subtotal, totalCusto, taxa, totalFinal, lucro };
-}
-
-function cartToItems(cart, products) {
-  const items = [];
-  for (const [prodId, qty] of Object.entries(cart)) {
-    const p = products.find(x => x.id === prodId);
-    if (p) {
-      items.push({
-        id: prodId,
-        name: p.nome,
-        qty,
-        unitPrice: p.preco,
-        unitCost: p.custo
-      });
-    }
-  }
-  return items;
+  return days;
 }
 
 function renderWeekTable(week) {
-  const rows = week.map(w => `
-    <tr>
-      <td>${w.dia}</td>
-      <td>${brl(w.faturamento)}</td>
-      <td>${brl(w.custos)}</td>
-      <td style="color:var(--good)">${brl(w.lucro)}</td>
-    </tr>
-  `).join("");
-
   return `
     <table class="table">
       <thead>
         <tr>
-          <th>Dia</th>
-          <th>Venda</th>
+          <th>Data</th>
+          <th>Faturamento</th>
           <th>Custo</th>
           <th>Lucro</th>
         </tr>
       </thead>
-      <tbody>${rows || ""}</tbody>
+      <tbody>
+        ${week
+          .map((d) => {
+            const label = new Date(d.date).toLocaleDateString("pt-BR", {
+              weekday: "short",
+              month: "2-digit",
+              day: "2-digit",
+            });
+            return `
+              <tr>
+                <td>${escapeHtml(label)}</td>
+                <td>${brl(d.faturamento)}</td>
+                <td>${brl(d.custos)}</td>
+                <td style="color:var(--good)">${brl(d.lucro)}</td>
+              </tr>
+            `;
+          })
+          .join("")}
+      </tbody>
     </table>
   `;
 }
 
 function getOpenOrdersToReceive() {
-  const open = (state.orders || []).filter(o => (o.status || "aberta") === "aberta");
-  return open.reduce((acc, o) => acc + (Number(o.total || 0) - Number(o.sinal || 0)), 0);
+  const orders = (state.orders || []).filter((o) => o.status === "aberta");
+  return orders.reduce((a, o) => a + Math.max(0, Number(o.total || 0) - Number(o.sinal || 0)), 0);
 }
 
-function getCashSummaryForDate(dateStr) {
-  const sales = (state.sales || []).filter(s => s.date === dateStr);
-  let dinheiro = 0, pix = 0, cartao = 0;
-  for (const s of sales) {
-    const v = Number(s.totalVenda || 0);
-    if (s.metodo === "dinheiro") dinheiro += v;
-    else if (s.metodo === "pix") pix += v;
-    else if (s.metodo === "cartao") cartao += v;
-  }
+function getRemainingDaysInMonth() {
+  const now = new Date();
+  const lastDay = new Date(now.getFullYear(), now.getMonth() + 1, 0);
+  return Math.max(0, lastDay.getDate() - now.getDate());
+}
+
+function getCashSummaryForDate(date) {
+  const moves = (state.cashMoves || []).filter((m) => m.date === date);
+
+  const dinheiro = moves.filter((m) => m.tipo === "dinheiro").reduce((a, m) => a + Number(m.valor || 0), 0);
+  const pix = moves.filter((m) => m.tipo === "pix").reduce((a, m) => a + Number(m.valor || 0), 0);
+  const cartao = moves.filter((m) => m.tipo === "cartao").reduce((a, m) => a + Number(m.valor || 0), 0);
+
   const entradasTotal = dinheiro + pix + cartao;
-  const saidas = (state.cashMoves || [])
-    .filter(m => m.date === dateStr && m.type === "out")
-    .reduce((a, m) => a + Number(m.value || 0), 0);
+
+  const saidas = moves.filter((m) => m.tipo === "saida").reduce((a, m) => a + Number(m.valor || 0), 0);
   const saldo = entradasTotal - saidas;
+
   return { dinheiro, pix, cartao, entradasTotal, saidas, saldo };
 }
 
-function seedProductsOnly() {
-  state.products = [
-    { id: newId(), nome: "Bolo no pote", preco: 12, custo: 5, createdAt: new Date().toISOString() },
-    { id: newId(), nome: "Brigadeiro (cx 10)", preco: 18, custo: 7, createdAt: new Date().toISOString() },
-    { id: newId(), nome: "Torta fatia", preco: 10, custo: 4, createdAt: new Date().toISOString() }
-  ];
-  persist();
+function toast(message, type = "info") {
+  let existing = qs(".dl-toast");
+  if (existing) existing.remove();
+
+  const el = document.createElement("div");
+  el.className = `dl-toast dl-toast--${type} is-visible`;
+  el.textContent = message;
+
+  document.body.appendChild(el);
+
+  setTimeout(() => {
+    el.classList.remove("is-visible");
+    setTimeout(() => el.remove(), 200);
+  }, 3000);
 }
 
 function seedDemo() {
-  if ((state.products || []).length === 0) seedProductsOnly();
-  const cart = {};
-  cart[state.products[0].id] = 2;
-  cart[state.products[1].id] = 1;
-  const totals = computeCartTotals(cart, state.products, "dinheiro", 0, 0);
-  state.sales.push({
-    id: newId(),
-    date: todayKey(),
-    createdAt: new Date().toISOString(),
-    metodo: "dinheiro",
-    items: cartToItems(cart, state.products),
-    desconto: 0,
-    acrescimo: 0,
-    recebido: 50,
-    troco: Math.max(0, 50 - totals.totalFinal),
-    totalVenda: totals.totalFinal,
-    totalCusto: totals.totalCusto,
-    taxaCartao: totals.taxa,
-    lucro: totals.lucro
-  });
-  const oCart = {};
-  oCart[state.products[2].id] = 3;
-  const items = cartToItems(oCart, state.products);
-  const subtotal = items.reduce((a, i) => a + i.qty * i.unitPrice, 0);
-  const totalCusto = items.reduce((a, i) => a + i.qty * i.unitCost, 0);
-  state.orders.push({
-    id: newId(),
-    createdAt: new Date().toISOString(),
-    status: "aberta",
-    cliente: "Cliente Demo",
-    whats: "",
-    dataRetirada: new Date().toISOString().slice(0, 10),
-    taxaEntrega: 5,
-    sinal: 10,
-    itemsById: oCart,
-    items,
-    total: subtotal + 5,
-    totalCusto,
-    lucroEstimado: calcProfit(subtotal + 5, totalCusto, 0)
-  });
-  state.cashMoves.push({
-    id: newId(),
-    date: todayKey(),
-    type: "out",
-    desc: "Compra de ingredientes",
-    value: 15,
-    createdAt: new Date().toISOString()
-  });
+  state.products = [
+    { id: newId(), nome: "Bolo no pote", preco: 25, custo: 8 },
+    { id: newId(), nome: "Brigadeiro (pote)", preco: 15, custo: 4 },
+    { id: newId(), nome: "Pavê", preco: 35, custo: 12 },
+    { id: newId(), nome: "Cupcake", preco: 8, custo: 2.5 },
+  ];
+
+  const today = todayKey();
+  state.sales = [
+    {
+      id: newId(),
+      date: today,
+      createdAt: new Date().toISOString(),
+      metodo: "pix",
+      items: [{ nome: "Bolo no pote", preco: 25, custo: 8, qty: 2, unitPrice: 25, unitCost: 8 }],
+      desconto: 0,
+      acrescimo: 0,
+      recebido: 0,
+      troco: 0,
+      totalVenda: 50,
+      totalCusto: 16,
+      taxaCartao: 0,
+      lucro: 34,
+    },
+    {
+      id: newId(),
+      date: today,
+      createdAt: new Date().toISOString(),
+      metodo: "dinheiro",
+      items: [
+        { nome: "Brigadeiro (pote)", preco: 15, custo: 4, qty: 3, unitPrice: 15, unitCost: 4 },
+        { nome: "Cupcake", preco: 8, custo: 2.5, qty: 5, unitPrice: 8, unitCost: 2.5 },
+      ],
+      desconto: 5,
+      acrescimo: 0,
+      recebido: 75,
+      troco: 5,
+      totalVenda: 70,
+      totalCusto: 24.5,
+      taxaCartao: 0,
+      lucro: 45.5,
+    },
+  ];
+
   persist();
 }
 
-function escapeHtml(str) {
-  return String(str ?? "")
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replaceAll('"', "&quot;")
-    .replaceAll("'", "&#039;");
-}
-
-function toast(message, type = "info") {
-  let el = document.querySelector(".dl-toast");
-  if (!el) {
-    el = document.createElement("div");
-    el.className = "dl-toast";
-    document.body.appendChild(el);
-  }
-  el.className = `dl-toast dl-toast--${type}`;
-  el.textContent = message;
-  requestAnimationFrame(() => el.classList.add("is-visible"));
-  clearTimeout(el._t);
-  el._t = setTimeout(() => el.classList.remove("is-visible"), 2200);
-}
-
-function parseMoneyInput(v) {
-  const s = String(v ?? "").trim();
-  if (!s) return 0;
-  const cleaned = s
-    .replace(/[^\d,.-]/g, "")
-    .replace(/\.(?=\d{3}(\D|$))/g, "");
-  const normalized = cleaned.includes(",")
-    ? cleaned.replaceAll(".", "").replace(",", ".")
-    : cleaned;
-  const n = Number(normalized);
-  return Number.isFinite(n) ? n : 0;
-}
-
-function formatMoneyInput(n) {
-  const val = Number(n || 0);
-  return val.toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-}
-
-function clampMoney(v, min, max) {
-  const n = Number(v || 0);
-  if (!Number.isFinite(n)) return min;
-  return Math.min(max, Math.max(min, n));
-}
-
-function calcMarginPercentLocal(preco, custo) {
-  const p = Number(preco || 0);
-  const c = Number(custo || 0);
-  if (!(p > 0)) return 0;
-  return Math.round(((p - c) / p) * 100);
-}
-
-async function registerSW() {
-  try {
-    if ("serviceWorker" in navigator) {
-      await navigator.serviceWorker.register("./sw.js");
-    }
-  } catch {
-    // ok
+function registerSW() {
+  if ("serviceWorker" in navigator) {
+    navigator.serviceWorker.register("./sw.js").catch(() => {});
   }
 }
 
+// start
 mount();

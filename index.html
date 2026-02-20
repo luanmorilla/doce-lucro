@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="pt-BR" dir="ltr" data-theme="dark">
+<html lang="pt-BR" dir="ltr">
 <head>
   <!-- ===============================
         Base / SEO
@@ -18,23 +18,24 @@
   <meta name="color-scheme" content="dark light" />
   <meta name="theme-color" content="#0b0f1a" />
 
-  <!-- Canonical (ajuste quando publicar em domínio real ) -->
-  <link rel="canonical" href="https://docelucro.app/" />
+  <!-- Canonical: coloque só quando tiver domínio final (evita SEO errado em deploys) -->
+  <!-- <link rel="canonical" href="https://SEU-DOMINIO-AQUI/" /> -->
 
   <!-- ===============================
-        Open Graph / Twitter (Compartilhamento )
+        Open Graph / Twitter (Compartilhamento)
+        (ajuste as URLs quando publicar em domínio real)
   ================================ -->
   <meta property="og:locale" content="pt_BR" />
   <meta property="og:title" content="Doce Lucro — Lucro real em segundos" />
   <meta property="og:description" content="Pare de vender sem saber se está lucrando. Descubra seu lucro real automaticamente." />
   <meta property="og:type" content="website" />
-  <meta property="og:url" content="https://docelucro.app/" />
-  <meta property="og:image" content="https://docelucro.app/assets/og-cover.png" />
+  <!-- <meta property="og:url" content="https://SEU-DOMINIO-AQUI/" /> -->
+  <!-- <meta property="og:image" content="https://SEU-DOMINIO-AQUI/assets/og-cover.png" /> -->
 
   <meta name="twitter:card" content="summary_large_image" />
   <meta name="twitter:title" content="Doce Lucro — Lucro real em segundos" />
   <meta name="twitter:description" content="Pare de vender sem saber se está lucrando. Descubra seu lucro real automaticamente." />
-  <meta name="twitter:image" content="https://docelucro.app/assets/og-cover.png" />
+  <!-- <meta name="twitter:image" content="https://SEU-DOMINIO-AQUI/assets/og-cover.png" /> -->
 
   <!-- ===============================
         PWA
@@ -52,19 +53,14 @@
   <meta name="format-detection" content="telephone=no, date=no, address=no, email=no" />
 
   <!-- ===============================
-        Fonts (Performance + Profissional )
+        Fonts (Performance + Profissional)
   ================================ -->
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet" />
 
   <!-- ===============================
-        Chart.js para gráficos profissionais
-  ================================ -->
-  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.js"></script>
-
-  <!-- ===============================
-        Anti-FOUC (tema ) — aplica tema antes de renderizar
+        Anti-FOUC (tema) — aplica tema antes de renderizar
   ================================ -->
   <script>
     (function () {
@@ -72,8 +68,16 @@
         var saved = localStorage.getItem('dl:theme');
         if (saved === 'dark' || saved === 'light') {
           document.documentElement.setAttribute('data-theme', saved);
+          // Ajusta theme-color conforme tema (melhor no mobile)
+          var themeColor = saved === 'light' ? '#ffffff' : '#0b0f1a';
+          var meta = document.querySelector('meta[name="theme-color"]');
+          if (meta) meta.setAttribute('content', themeColor);
+        } else {
+          document.documentElement.setAttribute('data-theme', 'dark');
         }
-      } catch (_) {}
+      } catch (_) {
+        document.documentElement.setAttribute('data-theme', 'dark');
+      }
     })();
   </script>
 
@@ -84,7 +88,7 @@
 </head>
 
 <body>
-  <!-- Skip link (Acessibilidade: teclado/screen reader) -->
+  <!-- Skip link (Acessibilidade) -->
   <a class="skiplink" href="#viewRoot">Pular para o conteúdo</a>
 
   <div id="app" class="app">
@@ -108,11 +112,11 @@
             class="iconbtn"
             type="button"
             aria-label="Alternar tema"
-            aria-pressed="false"
             title="Alternar tema"
           >
             <span class="icon" aria-hidden="true">🌙</span>
           </button>
+
           <button
             id="btnExport"
             class="iconbtn"
@@ -181,18 +185,17 @@
 
   <!-- ===============================
         Scripts
+        (Chart.js removido por enquanto: só adicione se realmente usar)
   ================================ -->
   <script type="module" src="./src/app.js"></script>
 
-  <!-- Estilo mínimo do skiplink -->
+  <!-- Estilos mínimos do skiplink + noscript -->
   <style>
     .skiplink {
       position: absolute;
       left: 12px;
       top: 12px;
       padding: 10px 12px;
-      background: rgba(255, 255, 255, 0.12);
-      color: #fff;
       border-radius: 10px;
       text-decoration: none;
       transform: translateY(-150%);
@@ -200,9 +203,28 @@
       z-index: 9999;
       outline: none;
       backdrop-filter: blur(10px);
+      border: 1px solid rgba(255, 255, 255, 0.14);
+      background: rgba(0, 0, 0, 0.55);
+      color: #fff;
     }
-    .skiplink:focus {
-      transform: translateY(0);
+    html[data-theme="light"] .skiplink{
+      background: rgba(255, 255, 255, 0.90);
+      border: 1px solid rgba(0, 0, 0, 0.10);
+      color: rgba(0,0,0,0.88);
+    }
+    .skiplink:focus { transform: translateY(0); }
+
+    .noscript {
+      padding: 14px 16px;
+      border-radius: 16px;
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      background: rgba(255, 255, 255, 0.06);
+      color: rgba(255, 255, 255, 0.92);
+    }
+    html[data-theme="light"] .noscript {
+      border: 1px solid rgba(0, 0, 0, 0.10);
+      background: rgba(0, 0, 0, 0.04);
+      color: rgba(0, 0, 0, 0.85);
     }
   </style>
 </body>
