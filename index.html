@@ -1,0 +1,209 @@
+<!doctype html>
+<html lang="pt-BR" dir="ltr" data-theme="dark">
+<head>
+  <!-- ===============================
+        Base / SEO
+  ================================ -->
+  <meta charset="utf-8" />
+  <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+
+  <title>Doce Lucro — Controle de Lucro Real para Docerias</title>
+  <meta name="description" content="Sistema premium para controle de lucro real de docerias. Vendas, encomendas, metas e relatórios em segundos." />
+  <meta name="keywords" content="doceria, controle de lucro, sistema para doceria, controle financeiro doceira, lucro real confeitaria" />
+  <meta name="author" content="Doce Lucro" />
+  <meta name="robots" content="index, follow" />
+
+  <!-- Ajuda navegadores a ajustar componentes nativos e barras do sistema -->
+  <meta name="color-scheme" content="dark light" />
+  <meta name="theme-color" content="#0b0f1a" />
+
+  <!-- Canonical (ajuste quando publicar em domínio real ) -->
+  <link rel="canonical" href="https://docelucro.app/" />
+
+  <!-- ===============================
+        Open Graph / Twitter (Compartilhamento )
+  ================================ -->
+  <meta property="og:locale" content="pt_BR" />
+  <meta property="og:title" content="Doce Lucro — Lucro real em segundos" />
+  <meta property="og:description" content="Pare de vender sem saber se está lucrando. Descubra seu lucro real automaticamente." />
+  <meta property="og:type" content="website" />
+  <meta property="og:url" content="https://docelucro.app/" />
+  <meta property="og:image" content="https://docelucro.app/assets/og-cover.png" />
+
+  <meta name="twitter:card" content="summary_large_image" />
+  <meta name="twitter:title" content="Doce Lucro — Lucro real em segundos" />
+  <meta name="twitter:description" content="Pare de vender sem saber se está lucrando. Descubra seu lucro real automaticamente." />
+  <meta name="twitter:image" content="https://docelucro.app/assets/og-cover.png" />
+
+  <!-- ===============================
+        PWA
+  ================================ -->
+  <link rel="manifest" href="./manifest.webmanifest" />
+  <meta name="application-name" content="Doce Lucro" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+
+  <link rel="icon" type="image/png" sizes="192x192" href="./assets/icons/icon-192.png" />
+  <link rel="apple-touch-icon" href="./assets/icons/icon-192.png" />
+
+  <!-- Evita que o iOS/Android "inventem" detecção automática indesejada -->
+  <meta name="format-detection" content="telephone=no, date=no, address=no, email=no" />
+
+  <!-- ===============================
+        Fonts (Performance + Profissional )
+  ================================ -->
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet" />
+
+  <!-- ===============================
+        Chart.js para gráficos profissionais
+  ================================ -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.js"></script>
+
+  <!-- ===============================
+        Anti-FOUC (tema ) — aplica tema antes de renderizar
+  ================================ -->
+  <script>
+    (function () {
+      try {
+        var saved = localStorage.getItem('dl:theme');
+        if (saved === 'dark' || saved === 'light') {
+          document.documentElement.setAttribute('data-theme', saved);
+        }
+      } catch (_) {}
+    })();
+  </script>
+
+  <!-- ===============================
+        Styles
+  ================================ -->
+  <link rel="stylesheet" href="./styles/styles.css" />
+</head>
+
+<body>
+  <!-- Skip link (Acessibilidade: teclado/screen reader) -->
+  <a class="skiplink" href="#viewRoot">Pular para o conteúdo</a>
+
+  <div id="app" class="app">
+
+    <!-- ===============================
+          TOPBAR
+    ================================ -->
+    <header class="topbar" role="banner">
+      <div class="topbar__wrap">
+        <div class="brand" aria-label="Doce Lucro">
+          <div class="brand__mark" aria-hidden="true">🍰</div>
+          <div class="brand__text">
+            <div class="brand__title">Doce Lucro</div>
+            <div class="brand__subtitle">Lucro real em segundos</div>
+          </div>
+        </div>
+
+        <div class="topbar__actions">
+          <button
+            id="btnTheme"
+            class="iconbtn"
+            type="button"
+            aria-label="Alternar tema"
+            aria-pressed="false"
+            title="Alternar tema"
+          >
+            <span class="icon" aria-hidden="true">🌙</span>
+          </button>
+          <button
+            id="btnExport"
+            class="iconbtn"
+            type="button"
+            aria-label="Exportar dados"
+            title="Exportar relatório"
+          >
+            <span class="icon" aria-hidden="true">📊</span>
+          </button>
+        </div>
+      </div>
+    </header>
+
+    <!-- ===============================
+          CONTEÚDO PRINCIPAL
+    ================================ -->
+    <main class="content" id="viewRoot" tabindex="-1">
+      <noscript>
+        <div class="noscript">
+          Este aplicativo precisa de JavaScript habilitado para funcionar.
+        </div>
+      </noscript>
+    </main>
+
+    <!-- ===============================
+          NAV (tab bar)
+    ================================ -->
+    <nav class="nav" aria-label="Navegação principal">
+      <button class="nav__item is-active" type="button" data-route="home" aria-current="page">
+        <span class="nav__icon" aria-hidden="true">📊</span>
+        <span class="nav__label">Painel</span>
+      </button>
+
+      <button class="nav__item" type="button" data-route="sale">
+        <span class="nav__icon" aria-hidden="true">💳</span>
+        <span class="nav__label">Venda</span>
+      </button>
+
+      <button class="nav__item" type="button" data-route="orders">
+        <span class="nav__icon" aria-hidden="true">📦</span>
+        <span class="nav__label">Encomendas</span>
+      </button>
+
+      <button class="nav__item" type="button" data-route="products">
+        <span class="nav__icon" aria-hidden="true">🎂</span>
+        <span class="nav__label">Produtos</span>
+      </button>
+
+      <button class="nav__item" type="button" data-route="reports">
+        <span class="nav__icon" aria-hidden="true">📈</span>
+        <span class="nav__label">Relatórios</span>
+      </button>
+
+      <button class="nav__item" type="button" data-route="more">
+        <span class="nav__icon" aria-hidden="true">⚙️</span>
+        <span class="nav__label">Mais</span>
+      </button>
+    </nav>
+
+  </div>
+
+  <!-- ===============================
+        Modal Container
+  ================================ -->
+  <div id="modalContainer"></div>
+
+  <!-- ===============================
+        Scripts
+  ================================ -->
+  <script type="module" src="./src/app.js"></script>
+
+  <!-- Estilo mínimo do skiplink -->
+  <style>
+    .skiplink {
+      position: absolute;
+      left: 12px;
+      top: 12px;
+      padding: 10px 12px;
+      background: rgba(255, 255, 255, 0.12);
+      color: #fff;
+      border-radius: 10px;
+      text-decoration: none;
+      transform: translateY(-150%);
+      transition: transform 150ms ease;
+      z-index: 9999;
+      outline: none;
+      backdrop-filter: blur(10px);
+    }
+    .skiplink:focus {
+      transform: translateY(0);
+    }
+  </style>
+</body>
+</html>
