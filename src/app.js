@@ -417,23 +417,28 @@ function renderSale(root) {
   const inpExtra = qs("#inpExtra");
   const inpRecebido = qs("#inpRecebido");
 
-  inpDiscount?.addEventListener("input", () => {
+   // ✅ NÃO re-renderizar enquanto digita (senão perde foco)
+   inpDiscount?.addEventListener("input", () => {
     state.ui.saleDiscount = parseMoneyInput(inpDiscount.value);
     persist();
-    renderSale(root);
   });
+  inpDiscount?.addEventListener("change", () => renderSale(root));
+  inpDiscount?.addEventListener("blur", () => renderSale(root));
 
   inpExtra?.addEventListener("input", () => {
     state.ui.saleExtra = parseMoneyInput(inpExtra.value);
     persist();
-    renderSale(root);
   });
+  inpExtra?.addEventListener("change", () => renderSale(root));
+  inpExtra?.addEventListener("blur", () => renderSale(root));
 
+  // ✅ ESTE é o principal (dinheiro)
   inpRecebido?.addEventListener("input", () => {
     state.ui.saleReceived = parseMoneyInput(inpRecebido.value);
     persist();
-    renderSale(root);
   });
+  inpRecebido?.addEventListener("change", () => renderSale(root));
+  inpRecebido?.addEventListener("blur", () => renderSale(root));
 
   // escolher pagamento
   qsa("[data-pay]").forEach((btn) => {
