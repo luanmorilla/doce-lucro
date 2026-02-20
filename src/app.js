@@ -4,6 +4,9 @@ import { calcCardFee, calcProfit, calcMargin, calcROI } from "./db.js";
 
 let state = normalizeState(loadState());
 
+/* =========================================================
+   MOUNT + DELEGATION (1x)
+========================================================= */
 function mount() {
   // tema inicial
   setTheme(state.theme || "dark");
@@ -27,10 +30,17 @@ function mount() {
     if (r) navigate(r, true);
   });
 
-  // nav dock
+  // nav dock (ok manter)
   qsa(".nav__item").forEach((btn) => {
     btn.addEventListener("click", () => navigate(btn.dataset.route));
   });
+
+  // delegation principal (1x)
+  const root = qs("#viewRoot");
+  if (root) bindRootDelegation(root);
+
+  const modalContainer = qs("#modalContainer");
+  if (modalContainer) bindModalDelegation(modalContainer);
 
   const hashRoute = (location.hash || "").replace("#", "").trim();
   navigate(hashRoute || state.route || "home", true);
@@ -38,6 +48,462 @@ function mount() {
   registerSW();
 }
 
+function bindRootDelegation(root) {
+  // CLICK: ações por rota / id / data-*
+  root.addEventListener("click", (ev) => {
+    const t = ev.target;
+    if (!(t instanceof Element)) return;
+
+    // HOME
+    if (state.route === "home") {
+      if (t.closest("#btnQuickSale")) return navigate("sale");
+      if (t.closest("#btnSeedDemo")) {
+        seedDemo();
+        toast("Dados demo inseridos ✅", "success");
+        return renderHome(root);
+      }
+      if (t.closest("#btnEditMeta")) {
+        const atual = Number(state.metaMensal || 0);
+        const v = prompt("Defina sua meta de LUCRO do mês (em R$). Ex: 3000", String(atual));
+        if (v === null) return;
+        const num = parseMoneyInput(v);
+        if (!Number.isFinite(num) || num < 0) {
+          toast("Valor inválido. Use um número como 3000.", "error");
+          return;
+        }
+        state.mesRef = monthKey();
+        state.metaMensal = num;
+        persist();
+        toast("Meta atualizada ✅", "success");
+        return renderHome(root);
+      }
+    }
+
+    // SALE
+    if (state.route === "sale") {
+      const payBtn = t.closest("[data-pay]");
+      if (payBtn) {
+        const pay = String(payBtn.getAttribute("data-pay") || "pix");
+        state.ui.salePay = pay || "pix";
+        state.ui.saleReceived = 0;
+        persist();
+        // troca pagamento pode criar/remover input recebido => re-render, com foco preservado
+        return renderSale(root);
+      }
+
+      const opBtn = t.closest("[data-op]");
+      if (opBtn) {
+        const prodId = String(opBtn.getAttribute("data-prod") || "");
+        const op = String(opBtn.getAttribute("data-op") || "");
+        if (!prodId) return;
+
+        const cart = state.ui.saleCart || {};
+        const qty = cart[prodId] || 0;
+
+        cart[prodId] = op === "plus" ? qty + 1 : Math.max(0, qty - 1);
+        if (cart[prodId] === 0) delete cart[prodId];
+
+        state.ui.saleCart = cart;
+        persist();
+        return renderSale(root);
+      }
+
+      if (t.closest("#btnFinalizeSale")) {
+        const products = state.products || [];
+        const cart = state.ui.saleCart || {};
+        const metodo = state.ui.salePay || "pix";
+        const desconto = Number(state.ui.saleDiscount || 0);
+        const acrescimo = Number(state.ui.saleExtra || 0);
+        const recebido = Number(state.ui.saleReceived || 0);
+
+        if (Object.keys(cart).length === 0) {
+          toast("Carrinho vazio!", "error");
+          return;
+        }
+
+        const totals = computeCartTotals(cart, products, metodo, desconto, acrescimo);
+        const falta = metodo === "dinheiro" ? Math.max(0, totals.totalFinal - recebido) : 0;
+        const troco = metodo === "dinheiro" ? Math.max(0, recebido - totals.totalFinal) : 0;
+
+        if (metodo === "dinheiro" && falta > 0) {
+          toast(`Falta receber ${brl(falta)}`, "error");
+          return;
+        }
+
+        const items = cartToItems(cart, products);
+
+        const venda = {
+          id: newId(),
+          date: todayKey(),
+          createdAt: new Date().toISOString(),
+          metodo,
+          items,
+          desconto,
+          acrescimo,
+          recebido,
+          troco,
+          totalVenda: totals.totalFinal,
+          totalCusto: totals.totalCusto,
+          taxaCartao: totals.taxa,
+          lucro: totals.lucro,
+        };
+
+        state.sales.push(venda);
+
+        // reset ui
+        state.ui.saleCart = {};
+        state.ui.saleDiscount = 0;
+        state.ui.saleExtra = 0;
+        state.ui.saleReceived = 0;
+        state.ui.salePay = "pix";
+
+        persist();
+        toast("Venda registrada ✅", "success");
+        return renderSale(root);
+      }
+
+      if (t.closest("#btnClearCart")) {
+        state.ui.saleCart = {};
+        state.ui.saleDiscount = 0;
+        state.ui.saleExtra = 0;
+        state.ui.saleReceived = 0;
+        persist();
+        return renderSale(root);
+      }
+
+      // empty-state CTA
+      if (t.closest("#goProducts")) return navigate("products");
+    }
+
+    // ORDERS
+    if (state.route === "orders") {
+      if (t.closest("#btnNewOrder")) return showOrderModal(null, root);
+
+      const orderBtn = t.closest("[data-order-id]");
+      if (orderBtn) {
+        const oid = String(orderBtn.getAttribute("data-order-id") || "");
+        const action = String(orderBtn.getAttribute("data-action") || "");
+        if (!oid) return;
+
+        if (action === "edit") return showOrderModal(oid, root);
+
+        if (action === "delete") {
+          if (confirm("Deletar encomenda?")) {
+            state.orders = (state.orders || []).filter((o) => o.id !== oid);
+            persist();
+            toast("Encomenda deletada ✅", "success");
+            return renderOrders(root);
+          }
+        }
+      }
+    }
+
+    // PRODUCTS
+    if (state.route === "products") {
+      if (t.closest("#btnNewProduct")) return showProductModal(null, root);
+
+      const prodBtn = t.closest("[data-prod-id]");
+      if (prodBtn) {
+        const pid = String(prodBtn.getAttribute("data-prod-id") || "");
+        const action = String(prodBtn.getAttribute("data-action") || "");
+        if (!pid) return;
+
+        if (action === "edit") return showProductModal(pid, root);
+
+        if (action === "delete") {
+          if (confirm("Deletar produto?")) {
+            state.products = (state.products || []).filter((p) => p.id !== pid);
+            persist();
+            toast("Produto deletado ✅", "success");
+            return renderProducts(root);
+          }
+        }
+      }
+    }
+
+    // MORE
+    if (state.route === "more") {
+      if (t.closest("#btnExportData")) {
+        const dataStr = JSON.stringify(state, null, 2);
+        const blob = new Blob([dataStr], { type: "application/json" });
+        const url = URL.createObjectURL(blob);
+
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = `doce-lucro-backup-${new Date().toISOString().slice(0, 10)}.json`;
+        a.click();
+
+        URL.revokeObjectURL(url);
+        toast("Dados exportados ✅", "success");
+        return;
+      }
+
+      if (t.closest("#btnImportData")) {
+        const input = document.createElement("input");
+        input.type = "file";
+        input.accept = ".json";
+
+        input.onchange = (e) => {
+          const file = e.target.files?.[0];
+          if (!file) return;
+
+          const reader = new FileReader();
+          reader.onload = (event) => {
+            try {
+              const imported = JSON.parse(String(event.target.result || "{}"));
+              state = normalizeState({ ...state, ...imported });
+              persist();
+              toast("Dados importados ✅", "success");
+              renderMore(root);
+            } catch (_) {
+              toast("Erro ao importar arquivo", "error");
+            }
+          };
+
+          reader.readAsText(file);
+        };
+
+        input.click();
+        return;
+      }
+
+      if (t.closest("#btnClearData")) {
+        if (confirm("⚠️ Tem certeza? Isso vai DELETAR TODOS os dados!")) {
+          state = normalizeState(getDefaultState());
+          persist();
+          toast("Dados limpos ✅", "success");
+          renderMore(root);
+        }
+      }
+    }
+  });
+
+  // INPUT/CHANGE/BLUR: especialmente SALE (sem re-render no input)
+  const saleDebouncedUpdate = debounce(() => {
+    if (state.route !== "sale") return;
+    updateSaleSummaryDOM(root);
+  }, 380);
+
+  root.addEventListener("input", (ev) => {
+    if (state.route !== "sale") return;
+    const t = ev.target;
+    if (!(t instanceof HTMLInputElement)) return;
+
+    if (t.id === "inpDiscount") {
+      state.ui.saleDiscount = parseMoneyInput(t.value);
+      persist();
+      saleDebouncedUpdate();
+      return;
+    }
+    if (t.id === "inpExtra") {
+      state.ui.saleExtra = parseMoneyInput(t.value);
+      persist();
+      saleDebouncedUpdate();
+      return;
+    }
+    if (t.id === "inpRecebido") {
+      state.ui.saleReceived = parseMoneyInput(t.value);
+      persist();
+      saleDebouncedUpdate();
+      return;
+    }
+  });
+
+  root.addEventListener("change", (ev) => {
+    if (state.route !== "sale") return;
+    const t = ev.target;
+    if (!(t instanceof HTMLInputElement)) return;
+
+    if (t.id === "inpDiscount") {
+      state.ui.saleDiscount = parseMoneyInput(t.value);
+      persist();
+      // normaliza visual
+      t.value = formatMoneyInput(state.ui.saleDiscount);
+      updateSaleSummaryDOM(root);
+      return;
+    }
+    if (t.id === "inpExtra") {
+      state.ui.saleExtra = parseMoneyInput(t.value);
+      persist();
+      t.value = formatMoneyInput(state.ui.saleExtra);
+      updateSaleSummaryDOM(root);
+      return;
+    }
+    if (t.id === "inpRecebido") {
+      state.ui.saleReceived = parseMoneyInput(t.value);
+      persist();
+      t.value = formatMoneyInput(state.ui.saleReceived);
+      updateSaleSummaryDOM(root);
+      return;
+    }
+  });
+
+  root.addEventListener(
+    "blur",
+    (ev) => {
+      if (state.route !== "sale") return;
+      const t = ev.target;
+      if (!(t instanceof HTMLInputElement)) return;
+
+      // blur também normaliza e atualiza
+      if (t.id === "inpDiscount") {
+        state.ui.saleDiscount = parseMoneyInput(t.value);
+        persist();
+        t.value = formatMoneyInput(state.ui.saleDiscount);
+        updateSaleSummaryDOM(root);
+      }
+      if (t.id === "inpExtra") {
+        state.ui.saleExtra = parseMoneyInput(t.value);
+        persist();
+        t.value = formatMoneyInput(state.ui.saleExtra);
+        updateSaleSummaryDOM(root);
+      }
+      if (t.id === "inpRecebido") {
+        state.ui.saleReceived = parseMoneyInput(t.value);
+        persist();
+        t.value = formatMoneyInput(state.ui.saleReceived);
+        updateSaleSummaryDOM(root);
+      }
+    },
+    true
+  );
+}
+
+function bindModalDelegation(container) {
+  container.addEventListener("click", (ev) => {
+    const t = ev.target;
+    if (!(t instanceof Element)) return;
+
+    const modal = container.querySelector(".modal");
+    if (!modal) return;
+
+    // fechar
+    if (t.closest("#closeModal")) {
+      modal.remove();
+      return;
+    }
+    // click fora do conteúdo
+    if (t === modal) {
+      modal.remove();
+      return;
+    }
+
+    // Order modal: +/- (data-op)
+    const opBtn = t.closest("[data-op]");
+    if (opBtn && modal.getAttribute("data-modal") === "order") {
+      const prodId = String(opBtn.getAttribute("data-prod") || "");
+      const op = String(opBtn.getAttribute("data-op") || "");
+      const orderId = modal.getAttribute("data-order-id") || "";
+      if (!prodId) return;
+
+      const products = state.products || [];
+      const order = orderId ? (state.orders || []).find((o) => o.id === orderId) : null;
+      const isEdit = !!order;
+      const itemsById = isEdit ? order.itemsById || {} : state.ui.orderDraftItems || {};
+
+      const q = itemsById[prodId] || 0;
+      itemsById[prodId] = op === "plus" ? q + 1 : Math.max(0, q - 1);
+      if (itemsById[prodId] === 0) delete itemsById[prodId];
+
+      state.ui.orderDraftItems = itemsById;
+      persist();
+      // re-render modal (preserva foco)
+      showOrderModal(orderId || null, qs("#viewRoot"));
+      return;
+    }
+
+    // Order modal: salvar / deletar
+    if (modal.getAttribute("data-modal") === "order") {
+      if (t.closest("#btnSaveOrder")) {
+        const root = qs("#viewRoot");
+        const orderId = modal.getAttribute("data-order-id") || "";
+        const products = state.products || [];
+        const order = orderId ? (state.orders || []).find((o) => o.id === orderId) : null;
+        const isEdit = !!order;
+
+        const itemsById = isEdit ? order.itemsById || {} : state.ui.orderDraftItems || {};
+
+        const cliente = (qs("#inpCliente")?.value || "").trim();
+        const whats = (qs("#inpWhats")?.value || "").trim();
+        const dataRetirada = qs("#inpData")?.value || "";
+        const taxaEntrega = parseMoneyInput(qs("#inpTaxa")?.value || "0");
+        const sinal = parseMoneyInput(qs("#inpSinal")?.value || "0");
+        const status = qs("#selStatus")?.value || "aberta";
+
+        if (!cliente) return toast("Preencha o nome do cliente", "error");
+        if (Object.keys(itemsById).length === 0) return toast("Adicione pelo menos um produto", "error");
+
+        const items = cartToItems(itemsById, products);
+        const subtotal = items.reduce((a, i) => a + i.qty * i.unitPrice, 0);
+        const totalCusto = items.reduce((a, i) => a + i.qty * i.unitCost, 0);
+        const total = subtotal + taxaEntrega;
+
+        if (isEdit) {
+          const idx = (state.orders || []).findIndex((o) => o.id === orderId);
+          if (idx >= 0) {
+            state.orders[idx] = {
+              ...order,
+              cliente,
+              whats,
+              dataRetirada,
+              taxaEntrega,
+              sinal,
+              status,
+              itemsById,
+              items,
+              total,
+              totalCusto,
+              lucroEstimado: calcProfit(total, totalCusto, 0),
+            };
+          }
+        } else {
+          state.orders.push({
+            id: newId(),
+            createdAt: new Date().toISOString(),
+            status: "aberta",
+            cliente,
+            whats,
+            dataRetirada,
+            taxaEntrega,
+            sinal,
+            itemsById,
+            items,
+            total,
+            totalCusto,
+            lucroEstimado: calcProfit(total, totalCusto, 0),
+          });
+        }
+
+        state.ui.orderDraftItems = {};
+        persist();
+        modal.remove();
+        toast(`Encomenda ${isEdit ? "atualizada" : "criada"} ✅`, "success");
+        renderOrders(root);
+        return;
+      }
+
+      if (t.closest("#btnDeleteOrder")) {
+        const root = qs("#viewRoot");
+        const orderId = modal.getAttribute("data-order-id") || "";
+        if (!orderId) return;
+        if (confirm("Tem certeza que quer deletar esta encomenda?")) {
+          state.orders = (state.orders || []).filter((o) => o.id !== orderId);
+          persist();
+          modal.remove();
+          toast("Encomenda deletada ✅", "success");
+          renderOrders(root);
+        }
+        return;
+      }
+    }
+
+    // Product modal: salvar/deletar (mantém listeners locais, então aqui não precisa)
+  });
+}
+
+/* =========================================================
+   STATE
+========================================================= */
 function normalizeState(s) {
   const base = getDefaultState();
 
@@ -55,7 +521,8 @@ function normalizeState(s) {
   merged.cashMoves = Array.isArray(merged.cashMoves) ? merged.cashMoves : [];
 
   // garantir objetos
-  merged.ui.saleCart = merged.ui.saleCart && typeof merged.ui.saleCart === "object" ? merged.ui.saleCart : {};
+  merged.ui.saleCart =
+    merged.ui.saleCart && typeof merged.ui.saleCart === "object" ? merged.ui.saleCart : {};
   merged.ui.orderDraftItems =
     merged.ui.orderDraftItems && typeof merged.ui.orderDraftItems === "object" ? merged.ui.orderDraftItems : {};
 
@@ -83,6 +550,9 @@ function persist() {
   saveState(state);
 }
 
+/* =========================================================
+   NAV + RENDER
+========================================================= */
 function navigate(route, silent = false) {
   const r = String(route || "home").trim();
   state.route = r || "home";
@@ -115,6 +585,51 @@ function render(route) {
   };
 
   (routes[route] || routes.home)();
+}
+
+/* =========================================================
+   RENDER HELPERS (FOCUS/CURSOR SAFE)
+========================================================= */
+function captureFocusSnapshot(root) {
+  const ae = document.activeElement;
+  if (!ae) return null;
+  if (!(ae instanceof HTMLInputElement || ae instanceof HTMLTextAreaElement)) return null;
+  if (!root.contains(ae)) return null;
+
+  const id = ae.id || "";
+  if (!id) return null;
+
+  return {
+    id,
+    value: ae.value,
+    selStart: typeof ae.selectionStart === "number" ? ae.selectionStart : null,
+    selEnd: typeof ae.selectionEnd === "number" ? ae.selectionEnd : null,
+  };
+}
+
+function restoreFocusSnapshot(snapshot) {
+  if (!snapshot || !snapshot.id) return;
+  const el = document.getElementById(snapshot.id);
+  if (!(el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement)) return;
+
+  // Não sobrescreve valor se o DOM já veio correto, mas garante o caso de re-render no meio
+  if (typeof snapshot.value === "string" && el.value !== snapshot.value) {
+    el.value = snapshot.value;
+  }
+
+  el.focus({ preventScroll: true });
+
+  if (typeof el.setSelectionRange === "function" && snapshot.selStart !== null && snapshot.selEnd !== null) {
+    try {
+      el.setSelectionRange(snapshot.selStart, snapshot.selEnd);
+    } catch (_) {}
+  }
+}
+
+function renderWithFocus(root, html) {
+  const snap = captureFocusSnapshot(root);
+  root.innerHTML = html;
+  restoreFocusSnapshot(snap);
 }
 
 /* =========================================================
@@ -152,7 +667,7 @@ function renderHome(root) {
           <div style="font-weight:900">🎯 Meta de lucro do mês</div>
           <div class="muted" style="font-size:12px;margin-top:4px">${escapeHtml(state.mesRef || monthKey())}</div>
         </div>
-        <button class="btn btn--small" id="btnEditMeta">Editar</button>
+        <button class="btn btn--small" id="btnEditMeta" type="button">Editar</button>
       </div>
 
       <div style="height:10px"></div>
@@ -223,37 +738,12 @@ function renderHome(root) {
 
     <div style="height:12px"></div>
 
-    <button class="btn btn--brand" id="btnQuickSale">⚡ Fazer venda (balcão)</button>
+    <button class="btn btn--brand" id="btnQuickSale" type="button">⚡ Fazer venda (balcão)</button>
     <div style="height:8px"></div>
-    <button class="btn" id="btnSeedDemo">📊 Inserir dados de teste (demo)</button>
+    <button class="btn" id="btnSeedDemo" type="button">📊 Inserir dados de teste (demo)</button>
   `;
 
-  root.innerHTML = html;
-
-  qs("#btnQuickSale")?.addEventListener("click", () => navigate("sale"));
-
-  qs("#btnSeedDemo")?.addEventListener("click", () => {
-    seedDemo();
-    toast("Dados demo inseridos ✅", "success");
-    renderHome(root);
-  });
-
-  qs("#btnEditMeta")?.addEventListener("click", () => {
-    const atual = Number(state.metaMensal || 0);
-    const v = prompt("Defina sua meta de LUCRO do mês (em R$). Ex: 3000", String(atual));
-    if (v === null) return;
-
-    const num = parseMoneyInput(v);
-    if (!Number.isFinite(num) || num < 0) {
-      toast("Valor inválido. Use um número como 3000.", "error");
-      return;
-    }
-    state.mesRef = monthKey();
-    state.metaMensal = num;
-    persist();
-    toast("Meta atualizada ✅", "success");
-    renderHome(root);
-  });
+  renderWithFocus(root, html);
 }
 
 function statCard(label, value, icon = "") {
@@ -272,18 +762,18 @@ function statCard(label, value, icon = "") {
 function renderSale(root) {
   const products = state.products || [];
   if (products.length === 0) {
-    root.innerHTML = `
+    const html = `
       <div class="h1">💳 Venda (Balcão)</div>
       <section class="card section">
         <div class="empty-state">
           <div class="empty-state__icon">📦</div>
           <div class="empty-state__title">Nenhum produto cadastrado</div>
           <div class="empty-state__description">Cadastre seus produtos primeiro para começar a vender.</div>
-          <button class="btn btn--brand" id="goProducts">Cadastrar produtos</button>
+          <button class="btn btn--brand" id="goProducts" type="button">Cadastrar produtos</button>
         </div>
       </section>
     `;
-    qs("#goProducts")?.addEventListener("click", () => navigate("products"));
+    renderWithFocus(root, html);
     return;
   }
 
@@ -323,12 +813,12 @@ function renderSale(root) {
 
       <div class="field mt-12">
         <div class="label">Desconto</div>
-        <input type="number" class="input" id="inpDiscount" placeholder="0,00" value="${formatMoneyInput(desconto)}" />
+        <input type="text" inputmode="decimal" class="input" id="inpDiscount" placeholder="0,00" value="${formatMoneyInput(desconto)}" />
       </div>
 
       <div class="field mt-12">
         <div class="label">Acréscimo (entrega, etc)</div>
-        <input type="number" class="input" id="inpExtra" placeholder="0,00" value="${formatMoneyInput(acrescimo)}" />
+        <input type="text" inputmode="decimal" class="input" id="inpExtra" placeholder="0,00" value="${formatMoneyInput(acrescimo)}" />
       </div>
 
       ${
@@ -336,7 +826,7 @@ function renderSale(root) {
           ? `
         <div class="field mt-12">
           <div class="label">Recebido em dinheiro</div>
-          <input type="number" class="input" id="inpRecebido" placeholder="0,00" value="${formatMoneyInput(recebido)}" />
+          <input type="text" inputmode="decimal" class="input" id="inpRecebido" placeholder="0,00" value="${formatMoneyInput(recebido)}" />
         </div>
       `
           : ""
@@ -347,176 +837,106 @@ function renderSale(root) {
       <div class="card section" style="background:rgba(255,79,163,0.08);border-color:rgba(255,79,163,0.25)">
         <div class="row">
           <div class="kpi"><b>Subtotal</b><span>Produtos</span></div>
-          <div class="value">${brl(totals.subtotal)}</div>
+          <div class="value" id="saleSubtotal">${brl(totals.subtotal)}</div>
         </div>
 
         <div class="row">
           <div class="kpi"><b>Custo</b><span>Total de custo</span></div>
-          <div class="value">${brl(totals.totalCusto)}</div>
+          <div class="value" id="saleCusto">${brl(totals.totalCusto)}</div>
         </div>
 
         <div class="row">
-          <div class="kpi"><b>Taxa</b><span>${metodo === "cartao" ? "2.99%" : "Sem taxa"}</span></div>
-          <div class="value">${brl(totals.taxa)}</div>
+          <div class="kpi"><b>Taxa</b><span id="saleTaxaLabel">${metodo === "cartao" ? "2.99%" : "Sem taxa"}</span></div>
+          <div class="value" id="saleTaxa">${brl(totals.taxa)}</div>
         </div>
 
         <div class="row">
           <div class="kpi"><b>Desconto</b><span>Aplicado</span></div>
-          <div class="value">-${brl(desconto)}</div>
+          <div class="value" id="saleDesconto">-${brl(desconto)}</div>
         </div>
 
         <div class="row">
           <div class="kpi"><b>Acréscimo</b><span>Adicionado</span></div>
-          <div class="value">+${brl(acrescimo)}</div>
+          <div class="value" id="saleAcrescimo">+${brl(acrescimo)}</div>
         </div>
 
         <div class="carttotal">
           <div class="kpi"><b>Total</b><span>A cobrar</span></div>
-          <div class="big" style="color:var(--brand)">${brl(totals.totalFinal)}</div>
+          <div class="big" style="color:var(--brand)" id="saleTotal">${brl(totals.totalFinal)}</div>
         </div>
 
         <div class="carttotal">
           <div class="kpi"><b>Lucro</b><span>Desta venda</span></div>
-          <div class="big" style="color:var(--good)">${brl(totals.lucro)}</div>
+          <div class="big" style="color:var(--good)" id="saleLucro">${brl(totals.lucro)}</div>
         </div>
 
-        ${
-          metodo === "dinheiro" && falta > 0
-            ? `
+        <div id="saleFaltaWrap" style="${metodo === "dinheiro" && falta > 0 ? "" : "display:none"}">
           <div class="carttotal" style="color:var(--warn)">
             <div class="kpi"><b>Falta</b><span>Ainda a receber</span></div>
-            <div class="big">${brl(falta)}</div>
+            <div class="big" id="saleFalta">${brl(falta)}</div>
           </div>
-        `
-            : ""
-        }
+        </div>
 
-        ${
-          metodo === "dinheiro" && troco > 0
-            ? `
+        <div id="saleTrocoWrap" style="${metodo === "dinheiro" && troco > 0 ? "" : "display:none"}">
           <div class="carttotal" style="color:var(--good)">
             <div class="kpi"><b>Troco</b><span>A devolver</span></div>
-            <div class="big">${brl(troco)}</div>
+            <div class="big" id="saleTroco">${brl(troco)}</div>
           </div>
-        `
-            : ""
-        }
+        </div>
       </div>
 
       <div style="height:12px"></div>
-      <button class="btn btn--brand" id="btnFinalizeSale" style="width:100%">✅ Finalizar venda</button>
+      <button class="btn btn--brand" id="btnFinalizeSale" style="width:100%" type="button">✅ Finalizar venda</button>
       <div style="height:8px"></div>
-      <button class="btn" id="btnClearCart" style="width:100%">🗑️ Limpar carrinho</button>
+      <button class="btn" id="btnClearCart" style="width:100%" type="button">🗑️ Limpar carrinho</button>
     </section>
   `;
 
-  root.innerHTML = html;
+  renderWithFocus(root, html);
 
-  // inputs
-  const inpDiscount = qs("#inpDiscount");
-  const inpExtra = qs("#inpExtra");
-  const inpRecebido = qs("#inpRecebido");
+  // pós-render: garantir resumo consistente (sem depender de input listener)
+  updateSaleSummaryDOM(root);
+}
 
-   // ✅ NÃO re-renderizar enquanto digita (senão perde foco)
-   inpDiscount?.addEventListener("input", () => {
-    state.ui.saleDiscount = parseMoneyInput(inpDiscount.value);
-    persist();
-  });
-  inpDiscount?.addEventListener("change", () => renderSale(root));
-  inpDiscount?.addEventListener("blur", () => renderSale(root));
+function updateSaleSummaryDOM(root) {
+  if (!root) return;
+  if (state.route !== "sale") return;
 
-  inpExtra?.addEventListener("input", () => {
-    state.ui.saleExtra = parseMoneyInput(inpExtra.value);
-    persist();
-  });
-  inpExtra?.addEventListener("change", () => renderSale(root));
-  inpExtra?.addEventListener("blur", () => renderSale(root));
+  const products = state.products || [];
+  const cart = state.ui.saleCart || {};
+  const metodo = state.ui.salePay || "pix";
+  const desconto = Number(state.ui.saleDiscount || 0);
+  const acrescimo = Number(state.ui.saleExtra || 0);
+  const recebido = Number(state.ui.saleReceived || 0);
 
-  // ✅ ESTE é o principal (dinheiro)
-  inpRecebido?.addEventListener("input", () => {
-    state.ui.saleReceived = parseMoneyInput(inpRecebido.value);
-    persist();
-  });
-  inpRecebido?.addEventListener("change", () => renderSale(root));
-  inpRecebido?.addEventListener("blur", () => renderSale(root));
+  const totals = computeCartTotals(cart, products, metodo, desconto, acrescimo);
+  const falta = metodo === "dinheiro" ? Math.max(0, totals.totalFinal - recebido) : 0;
+  const troco = metodo === "dinheiro" ? Math.max(0, recebido - totals.totalFinal) : 0;
 
-  // escolher pagamento
-  qsa("[data-pay]").forEach((btn) => {
-    btn.addEventListener("click", () => {
-      state.ui.salePay = btn.dataset.pay || "pix";
-      state.ui.saleReceived = 0;
-      persist();
-      renderSale(root);
-    });
-  });
+  const setText = (id, txt) => {
+    const el = root.querySelector(`#${id}`);
+    if (el) el.textContent = txt;
+  };
 
-  // ✅ FIX PRINCIPAL: + e - do carrinho
-  qsa("[data-op]").forEach((btn) => {
-    btn.addEventListener("click", () => {
-      const prodId = btn.dataset.prod;
-      const op = btn.dataset.op;
-      const qty = cart[prodId] || 0;
+  setText("saleSubtotal", brl(totals.subtotal));
+  setText("saleCusto", brl(totals.totalCusto));
+  setText("saleTaxa", brl(totals.taxa));
+  setText("saleDesconto", `-${brl(desconto)}`);
+  setText("saleAcrescimo", `+${brl(acrescimo)}`);
+  setText("saleTotal", brl(totals.totalFinal));
+  setText("saleLucro", brl(totals.lucro));
 
-      cart[prodId] = op === "plus" ? qty + 1 : Math.max(0, qty - 1);
-      if (cart[prodId] === 0) delete cart[prodId];
+  const taxaLabel = root.querySelector("#saleTaxaLabel");
+  if (taxaLabel) taxaLabel.textContent = metodo === "cartao" ? "2.99%" : "Sem taxa";
 
-      state.ui.saleCart = cart;
-      persist();
-      renderSale(root);
-    });
-  });
+  const faltaWrap = root.querySelector("#saleFaltaWrap");
+  const trocoWrap = root.querySelector("#saleTrocoWrap");
 
-  // finalizar
-  qs("#btnFinalizeSale")?.addEventListener("click", () => {
-    if (Object.keys(cart).length === 0) {
-      toast("Carrinho vazio!", "error");
-      return;
-    }
-    if (metodo === "dinheiro" && falta > 0) {
-      toast(`Falta receber ${brl(falta)}`, "error");
-      return;
-    }
+  if (faltaWrap) faltaWrap.style.display = metodo === "dinheiro" && falta > 0 ? "" : "none";
+  if (trocoWrap) trocoWrap.style.display = metodo === "dinheiro" && troco > 0 ? "" : "none";
 
-    const items = cartToItems(cart, products);
-
-    const venda = {
-      id: newId(),
-      date: todayKey(),
-      createdAt: new Date().toISOString(),
-      metodo,
-      items,
-      desconto,
-      acrescimo,
-      recebido,
-      troco,
-      totalVenda: totals.totalFinal,
-      totalCusto: totals.totalCusto,
-      taxaCartao: totals.taxa,
-      lucro: totals.lucro,
-    };
-
-    state.sales.push(venda);
-
-    // reset ui
-    state.ui.saleCart = {};
-    state.ui.saleDiscount = 0;
-    state.ui.saleExtra = 0;
-    state.ui.saleReceived = 0;
-    state.ui.salePay = "pix";
-
-    persist();
-    toast("Venda registrada ✅", "success");
-    renderSale(root);
-  });
-
-  qs("#btnClearCart")?.addEventListener("click", () => {
-    state.ui.saleCart = {};
-    state.ui.saleDiscount = 0;
-    state.ui.saleExtra = 0;
-    state.ui.saleReceived = 0;
-    persist();
-    renderSale(root);
-  });
+  setText("saleFalta", brl(falta));
+  setText("saleTroco", brl(troco));
 }
 
 function renderProductAddRow(product, cart) {
@@ -548,7 +968,7 @@ function renderOrders(root) {
     <div class="h1">📦 Encomendas</div>
 
     <section class="card section">
-      <button class="btn btn--brand" id="btnNewOrder" style="width:100%">➕ Nova encomenda</button>
+      <button class="btn btn--brand" id="btnNewOrder" style="width:100%" type="button">➕ Nova encomenda</button>
     </section>
 
     <div style="height:12px"></div>
@@ -572,27 +992,7 @@ function renderOrders(root) {
     }
   `;
 
-  root.innerHTML = html;
-
-  qs("#btnNewOrder")?.addEventListener("click", () => showOrderModal(null, root));
-
-  qsa("[data-order-id]").forEach((btn) => {
-    btn.addEventListener("click", () => {
-      const oid = btn.dataset.orderId;
-      const action = btn.dataset.action;
-
-      if (action === "edit") showOrderModal(oid, root);
-
-      if (action === "delete") {
-        if (confirm("Deletar encomenda?")) {
-          state.orders = state.orders.filter((o) => o.id !== oid);
-          persist();
-          toast("Encomenda deletada ✅", "success");
-          renderOrders(root);
-        }
-      }
-    });
-  });
+  renderWithFocus(root, html);
 }
 
 function renderOrderRow(order) {
@@ -616,7 +1016,7 @@ function renderOrderRow(order) {
 
 function showOrderModal(orderId, root) {
   const products = state.products || [];
-  const order = orderId ? state.orders.find((o) => o.id === orderId) : null;
+  const order = orderId ? (state.orders || []).find((o) => o.id === orderId) : null;
   const isEdit = !!order;
 
   const itemsById = isEdit ? order.itemsById || {} : state.ui.orderDraftItems || {};
@@ -630,7 +1030,7 @@ function showOrderModal(orderId, root) {
   const total = subtotal + taxaEntregaBase;
 
   const html = `
-    <div class="modal">
+    <div class="modal" data-modal="order" data-order-id="${escapeHtml(orderId || "")}">
       <div class="modal__content">
         <div class="modal__header">
           <div class="modal__title">${isEdit ? "Editar encomenda" : "Nova encomenda"}</div>
@@ -721,104 +1121,10 @@ function showOrderModal(orderId, root) {
   `;
 
   const container = qs("#modalContainer");
+  // preserva foco dentro do modal ao re-render
+  const snap = captureFocusSnapshot(container);
   container.innerHTML = html;
-
-  const modal = qs(".modal");
-  qs("#closeModal")?.addEventListener("click", () => modal?.remove());
-  modal?.addEventListener("click", (e) => {
-    if (e.target === modal) modal.remove();
-  });
-
-  // botões + e -
-  qsa("[data-op]").forEach((btn) => {
-    btn.addEventListener("click", () => {
-      const prodId = btn.dataset.prod;
-      const op = btn.dataset.op;
-      const q = itemsById[prodId] || 0;
-
-      itemsById[prodId] = op === "plus" ? q + 1 : Math.max(0, q - 1);
-      if (itemsById[prodId] === 0) delete itemsById[prodId];
-
-      state.ui.orderDraftItems = itemsById;
-      persist();
-      showOrderModal(orderId, root);
-    });
-  });
-
-  qs("#btnSaveOrder")?.addEventListener("click", () => {
-    const cliente = (qs("#inpCliente")?.value || "").trim();
-    const whats = (qs("#inpWhats")?.value || "").trim();
-    const dataRetirada = qs("#inpData")?.value || "";
-    const taxaEntrega = parseMoneyInput(qs("#inpTaxa")?.value || "0");
-    const sinal = parseMoneyInput(qs("#inpSinal")?.value || "0");
-    const status = qs("#selStatus")?.value || "aberta";
-
-    if (!cliente) {
-      toast("Preencha o nome do cliente", "error");
-      return;
-    }
-    if (Object.keys(itemsById).length === 0) {
-      toast("Adicione pelo menos um produto", "error");
-      return;
-    }
-
-    const items = cartToItems(itemsById, products);
-    const subtotal = items.reduce((a, i) => a + i.qty * i.unitPrice, 0);
-    const totalCusto = items.reduce((a, i) => a + i.qty * i.unitCost, 0);
-    const total = subtotal + taxaEntrega;
-
-    if (isEdit) {
-      const idx = state.orders.findIndex((o) => o.id === orderId);
-      if (idx >= 0) {
-        state.orders[idx] = {
-          ...order,
-          cliente,
-          whats,
-          dataRetirada,
-          taxaEntrega,
-          sinal,
-          status,
-          itemsById,
-          items,
-          total,
-          totalCusto,
-          lucroEstimado: calcProfit(total, totalCusto, 0),
-        };
-      }
-    } else {
-      state.orders.push({
-        id: newId(),
-        createdAt: new Date().toISOString(),
-        status: "aberta",
-        cliente,
-        whats,
-        dataRetirada,
-        taxaEntrega,
-        sinal,
-        itemsById,
-        items,
-        total,
-        totalCusto,
-        lucroEstimado: calcProfit(total, totalCusto, 0),
-      });
-    }
-
-    state.ui.orderDraftItems = {};
-    persist();
-    modal.remove();
-    toast(`Encomenda ${isEdit ? "atualizada" : "criada"} ✅`, "success");
-    renderOrders(root);
-  });
-
-  qs("#btnDeleteOrder")?.addEventListener("click", () => {
-    if (confirm("Tem certeza que quer deletar esta encomenda?")) {
-      state.orders = state.orders.filter((o) => o.id !== orderId);
-      persist();
-      modal.remove();
-      toast("Encomenda deletada ✅", "success");
-      renderOrders(root);
-    }
-  });
+  restoreFocusSnapshot(snap);
 }
 
 function renderOrderProductRow(product, itemsById) {
@@ -874,27 +1180,7 @@ function renderProducts(root) {
     }
   `;
 
-  root.innerHTML = html;
-
-  qs("#btnNewProduct")?.addEventListener("click", () => showProductModal(null, root));
-
-  qsa("[data-prod-id]").forEach((btn) => {
-    btn.addEventListener("click", () => {
-      const pid = btn.dataset.prodId;
-      const action = btn.dataset.action;
-
-      if (action === "edit") showProductModal(pid, root);
-
-      if (action === "delete") {
-        if (confirm("Deletar produto?")) {
-          state.products = state.products.filter((p) => p.id !== pid);
-          persist();
-          toast("Produto deletado ✅", "success");
-          renderProducts(root);
-        }
-      }
-    });
-  });
+  renderWithFocus(root, html);
 }
 
 function renderProductRow(product) {
@@ -920,7 +1206,7 @@ function renderProductRow(product) {
 }
 
 function showProductModal(productId, root) {
-  const product = productId ? state.products.find((p) => p.id === productId) : null;
+  const product = productId ? (state.products || []).find((p) => p.id === productId) : null;
   const isEdit = !!product;
 
   const html = `
@@ -1004,7 +1290,7 @@ function showProductModal(productId, root) {
     if (!Number.isFinite(custo) || custo < 0) return toast("Custo inválido", "error");
 
     if (isEdit) {
-      const idx = state.products.findIndex((p) => p.id === productId);
+      const idx = (state.products || []).findIndex((p) => p.id === productId);
       if (idx >= 0) state.products[idx] = { ...product, nome, preco, custo };
     } else {
       state.products.push({ id: newId(), nome, preco, custo });
@@ -1018,7 +1304,7 @@ function showProductModal(productId, root) {
 
   qs("#btnDeleteProduct")?.addEventListener("click", () => {
     if (confirm("Deletar produto?")) {
-      state.products = state.products.filter((p) => p.id !== productId);
+      state.products = (state.products || []).filter((p) => p.id !== productId);
       persist();
       modal.remove();
       toast("Produto deletado ✅", "success");
@@ -1129,7 +1415,7 @@ function renderReports(root) {
     </section>
   `;
 
-  root.innerHTML = html;
+  renderWithFocus(root, html);
 }
 
 /* =========================================================
@@ -1160,58 +1446,7 @@ function renderMore(root) {
     </section>
   `;
 
-  root.innerHTML = html;
-
-  qs("#btnExportData")?.addEventListener("click", () => {
-    const dataStr = JSON.stringify(state, null, 2);
-    const blob = new Blob([dataStr], { type: "application/json" });
-    const url = URL.createObjectURL(blob);
-
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `doce-lucro-backup-${new Date().toISOString().slice(0, 10)}.json`;
-    a.click();
-
-    URL.revokeObjectURL(url);
-    toast("Dados exportados ✅", "success");
-  });
-
-  qs("#btnImportData")?.addEventListener("click", () => {
-    const input = document.createElement("input");
-    input.type = "file";
-    input.accept = ".json";
-
-    input.onchange = (e) => {
-      const file = e.target.files?.[0];
-      if (!file) return;
-
-      const reader = new FileReader();
-      reader.onload = (event) => {
-        try {
-          const imported = JSON.parse(String(event.target.result || "{}"));
-          state = normalizeState({ ...state, ...imported });
-          persist();
-          toast("Dados importados ✅", "success");
-          renderMore(root);
-        } catch (err) {
-          toast("Erro ao importar arquivo", "error");
-        }
-      };
-
-      reader.readAsText(file);
-    };
-
-    input.click();
-  });
-
-  qs("#btnClearData")?.addEventListener("click", () => {
-    if (confirm("⚠️ Tem certeza? Isso vai DELETAR TODOS os dados!")) {
-      state = normalizeState(getDefaultState());
-      persist();
-      toast("Dados limpos ✅", "success");
-      renderMore(root);
-    }
-  });
+  renderWithFocus(root, html);
 }
 
 /* =========================================================
@@ -1311,9 +1546,38 @@ function escapeHtml(text) {
   return String(text ?? "").replace(/[&<>"']/g, (m) => map[m]);
 }
 
+// robusto: aceita "12,50", "12.50", "1.234,56", "1,234.56"
 function parseMoneyInput(value) {
   if (value === null || value === undefined) return 0;
-  const str = String(value).replace(/[^\d.,-]/g, "").replace(",", ".");
+
+  let str = String(value).trim();
+  if (!str) return 0;
+
+  // mantém dígitos, separadores e sinal
+  str = str.replace(/[^\d.,-]/g, "");
+
+  const hasComma = str.includes(",");
+  const hasDot = str.includes(".");
+
+  if (hasComma && hasDot) {
+    // escolhe o último separador como decimal
+    const lastComma = str.lastIndexOf(",");
+    const lastDot = str.lastIndexOf(".");
+    if (lastComma > lastDot) {
+      // vírgula decimal, ponto milhar
+      str = str.replace(/\./g, "").replace(",", ".");
+    } else {
+      // ponto decimal, vírgula milhar
+      str = str.replace(/,/g, "");
+    }
+  } else if (hasComma) {
+    // vírgula decimal
+    str = str.replace(/\./g, "").replace(",", ".");
+  } else {
+    // só ponto ou só dígitos: ok
+    // se vier "1.234" e usuário quis milhar, vira 1.234 (não tem como adivinhar 100%)
+  }
+
   const num = parseFloat(str);
   return Number.isFinite(num) ? num : 0;
 }
@@ -1352,6 +1616,14 @@ function cartToItems(cart, products) {
       };
     })
     .filter(Boolean);
+}
+
+function debounce(fn, wait = 350) {
+  let t = null;
+  return (...args) => {
+    if (t) clearTimeout(t);
+    t = setTimeout(() => fn(...args), wait);
+  };
 }
 
 function todayKey() {
