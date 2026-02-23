@@ -1,231 +1,66 @@
 <!doctype html>
-<html lang="pt-BR" dir="ltr">
+<html lang="pt-br">
 <head>
-  <!-- ===============================
-        Base / SEO
-  ================================ -->
   <meta charset="utf-8" />
-  <meta http-equiv="X-UA-Compatible" content="IE=edge" />
-  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-
-  <title>Doce Lucro — Controle de Lucro Real para Docerias</title>
-  <meta name="description" content="Sistema premium para controle de lucro real de docerias. Vendas, encomendas, metas e relatórios em segundos." />
-  <meta name="keywords" content="doceria, controle de lucro, sistema para doceria, controle financeiro doceira, lucro real confeitaria" />
-  <meta name="author" content="Doce Lucro" />
-  <meta name="robots" content="index, follow" />
-
-  <!-- Ajuda navegadores a ajustar componentes nativos e barras do sistema -->
-  <meta name="color-scheme" content="dark light" />
-  <meta name="theme-color" content="#0b0f1a" />
-
-  <!-- Canonical: coloque só quando tiver domínio final (evita SEO errado em deploys) -->
-  <!-- <link rel="canonical" href="https://SEU-DOMINIO-AQUI/" /> -->
-
-  <!-- ===============================
-        Open Graph / Twitter (Compartilhamento)
-        (ajuste as URLs quando publicar em domínio real)
-  ================================ -->
-  <meta property="og:locale" content="pt_BR" />
-  <meta property="og:title" content="Doce Lucro — Lucro real em segundos" />
-  <meta property="og:description" content="Pare de vender sem saber se está lucrando. Descubra seu lucro real automaticamente." />
-  <meta property="og:type" content="website" />
-  <!-- <meta property="og:url" content="https://SEU-DOMINIO-AQUI/" /> -->
-  <!-- <meta property="og:image" content="https://SEU-DOMINIO-AQUI/assets/og-cover.png" /> -->
-
-  <meta name="twitter:card" content="summary_large_image" />
-  <meta name="twitter:title" content="Doce Lucro — Lucro real em segundos" />
-  <meta name="twitter:description" content="Pare de vender sem saber se está lucrando. Descubra seu lucro real automaticamente." />
-  <!-- <meta name="twitter:image" content="https://SEU-DOMINIO-AQUI/assets/og-cover.png" /> -->
-
-  <!-- ===============================
-        PWA
-  ================================ -->
-  <link rel="manifest" href="./manifest.webmanifest" />
-  <meta name="application-name" content="Doce Lucro" />
-  <meta name="mobile-web-app-capable" content="yes" />
-  <meta name="apple-mobile-web-app-capable" content="yes" />
-  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
-
-  <link rel="icon" type="image/png" sizes="192x192" href="./assets/icons/icon-192.png" />
-  <link rel="apple-touch-icon" href="./assets/icons/icon-192.png" />
-
-  <!-- Evita que o iOS/Android "inventem" detecção automática indesejada -->
-  <meta name="format-detection" content="telephone=no, date=no, address=no, email=no" />
-
-  <!-- ===============================
-        Fonts (Performance + Profissional)
-  ================================ -->
-  <link rel="preconnect" href="https://fonts.googleapis.com" />
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet" />
-
-  <!-- ===============================
-        Anti-FOUC (tema) — aplica tema antes de renderizar
-  ================================ -->
-  <script>
-    (function () {
-      try {
-        var saved = localStorage.getItem('dl:theme');
-        if (saved === 'dark' || saved === 'light') {
-          document.documentElement.setAttribute('data-theme', saved);
-          // Ajusta theme-color conforme tema (melhor no mobile)
-          var themeColor = saved === 'light' ? '#ffffff' : '#0b0f1a';
-          var meta = document.querySelector('meta[name="theme-color"]');
-          if (meta) meta.setAttribute('content', themeColor);
-        } else {
-          document.documentElement.setAttribute('data-theme', 'dark');
-        }
-      } catch (_) {
-        document.documentElement.setAttribute('data-theme', 'dark');
-      }
-    })();
-  </script>
-
-  <!-- ===============================
-        Styles
-  ================================ -->
-  <link rel="stylesheet" href="./styles/styles.css" />
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
+  <title>Doce Lucro</title>
+  <link rel="manifest" href="./manifest.webmanifest">
+  <link rel="stylesheet" href="./styles.css" />
 </head>
-
 <body>
-  <!-- Skip link (Acessibilidade) -->
-  <a class="skiplink" href="#viewRoot">Pular para o conteúdo</a>
-
-  <div id="app" class="app">
-
-    <!-- ===============================
-          TOPBAR
-    ================================ -->
-    <header class="topbar" role="banner">
+  <div class="app">
+    <header class="topbar">
       <div class="topbar__wrap">
-        <div class="brand" aria-label="Doce Lucro">
-          <div class="brand__mark" aria-hidden="true">🍰</div>
+        <div class="brand">
+          <div class="brand__mark">🍰</div>
           <div class="brand__text">
-            <div class="brand__title">Doce Lucro</div>
-            <div class="brand__subtitle">Lucro real em segundos</div>
+            <div class="brand__title" id="brandName">Doce Lucro</div>
+            <div class="brand__subtitle" id="brandSub">Lucro real em segundos</div>
           </div>
         </div>
 
         <div class="topbar__actions">
-          <button
-            id="btnTheme"
-            class="iconbtn"
-            type="button"
-            aria-label="Alternar tema"
-            title="Alternar tema"
-          >
-            <span class="icon" aria-hidden="true">🌙</span>
-          </button>
-
-          <button
-            id="btnExport"
-            class="iconbtn"
-            type="button"
-            aria-label="Exportar dados"
-            title="Exportar relatório"
-          >
-            <span class="icon" aria-hidden="true">📊</span>
+          <button class="iconbtn" id="btnTheme" type="button" aria-label="Tema">
+            <span class="icon">🌙</span>
           </button>
         </div>
       </div>
     </header>
 
-    <!-- ===============================
-          CONTEÚDO PRINCIPAL
-    ================================ -->
-    <main class="content" id="viewRoot" tabindex="-1">
-      <noscript>
-        <div class="noscript">
-          Este aplicativo precisa de JavaScript habilitado para funcionar.
-        </div>
-      </noscript>
+    <main class="content">
+      <div id="viewRoot"></div>
     </main>
 
-    <!-- ===============================
-          NAV (tab bar)
-    ================================ -->
-    <nav class="nav" aria-label="Navegação principal">
-      <button class="nav__item is-active" type="button" data-route="home" aria-current="page">
-        <span class="nav__icon" aria-hidden="true">📊</span>
-        <span class="nav__label">Painel</span>
+    <nav class="nav" aria-label="Navegação">
+      <button class="nav__item" data-route="home" type="button">
+        <div class="nav__icon">🏠</div>
+        <div class="nav__label">Início</div>
       </button>
-
-      <button class="nav__item" type="button" data-route="sale">
-        <span class="nav__icon" aria-hidden="true">💳</span>
-        <span class="nav__label">Venda</span>
+      <button class="nav__item" data-route="sale" type="button">
+        <div class="nav__icon">💳</div>
+        <div class="nav__label">Venda</div>
       </button>
-
-      <button class="nav__item" type="button" data-route="orders">
-        <span class="nav__icon" aria-hidden="true">📦</span>
-        <span class="nav__label">Encomendas</span>
+      <button class="nav__item" data-route="orders" type="button">
+        <div class="nav__icon">📦</div>
+        <div class="nav__label">Encom.</div>
       </button>
-
-      <button class="nav__item" type="button" data-route="products">
-        <span class="nav__icon" aria-hidden="true">🎂</span>
-        <span class="nav__label">Produtos</span>
+      <button class="nav__item" data-route="products" type="button">
+        <div class="nav__icon">🎂</div>
+        <div class="nav__label">Produtos</div>
       </button>
-
-      <button class="nav__item" type="button" data-route="reports">
-        <span class="nav__icon" aria-hidden="true">📈</span>
-        <span class="nav__label">Relatórios</span>
+      <button class="nav__item" data-route="reports" type="button">
+        <div class="nav__icon">📈</div>
+        <div class="nav__label">Relatórios</div>
       </button>
-
-      <button class="nav__item" type="button" data-route="more">
-        <span class="nav__icon" aria-hidden="true">⚙️</span>
-        <span class="nav__label">Mais</span>
+      <button class="nav__item" data-route="more" type="button">
+        <div class="nav__icon">⚙️</div>
+        <div class="nav__label">Mais</div>
       </button>
     </nav>
 
+    <div id="modalContainer"></div>
   </div>
 
-  <!-- ===============================
-        Modal Container
-  ================================ -->
-  <div id="modalContainer"></div>
-
-  <!-- ===============================
-        Scripts
-        (Chart.js removido por enquanto: só adicione se realmente usar)
-  ================================ -->
   <script type="module" src="./src/app.js"></script>
-
-  <!-- Estilos mínimos do skiplink + noscript -->
-  <style>
-    .skiplink {
-      position: absolute;
-      left: 12px;
-      top: 12px;
-      padding: 10px 12px;
-      border-radius: 10px;
-      text-decoration: none;
-      transform: translateY(-150%);
-      transition: transform 150ms ease;
-      z-index: 9999;
-      outline: none;
-      backdrop-filter: blur(10px);
-      border: 1px solid rgba(255, 255, 255, 0.14);
-      background: rgba(0, 0, 0, 0.55);
-      color: #fff;
-    }
-    html[data-theme="light"] .skiplink{
-      background: rgba(255, 255, 255, 0.90);
-      border: 1px solid rgba(0, 0, 0, 0.10);
-      color: rgba(0,0,0,0.88);
-    }
-    .skiplink:focus { transform: translateY(0); }
-
-    .noscript {
-      padding: 14px 16px;
-      border-radius: 16px;
-      border: 1px solid rgba(255, 255, 255, 0.12);
-      background: rgba(255, 255, 255, 0.06);
-      color: rgba(255, 255, 255, 0.92);
-    }
-    html[data-theme="light"] .noscript {
-      border: 1px solid rgba(0, 0, 0, 0.10);
-      background: rgba(0, 0, 0, 0.04);
-      color: rgba(0, 0, 0, 0.85);
-    }
-  </style>
 </body>
 </html>

@@ -33,8 +33,9 @@
   --r2: 16px;
   --r3: 12px;
 
-  --safeTop: env(safe-area-inset-top, 0px);
-  --safeBottom: env(safe-area-inset-bottom, 0px);
+  /* ✅ MAIS ROBUSTO: safe-area + respiro mínimo (Android corta menos) */
+  --safeTop: max(env(safe-area-inset-top, 0px), 0px);
+  --safeBottom: max(env(safe-area-inset-bottom, 0px), 12px);
 
   --maxw: 1060px;
 
@@ -42,6 +43,10 @@
   --glass: blur(18px);
 
   --transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+
+  /* ✅ NAV sizing (pra não cortar no Android) */
+  --nav-gap: 10px;
+  --nav-h: 78px;
 }
 
 :root[data-theme="light"] {
@@ -224,7 +229,8 @@ button { font-family: inherit; }
   width: min(var(--maxw), 100%);
   margin: 0 auto;
   padding: 18px 16px;
-  padding-bottom: calc(108px + var(--safeBottom));
+  /* ✅ espaço real garantido pra nav + safe area (evita cortar) */
+  padding-bottom: calc(var(--nav-h) + 48px + var(--safeBottom));
   flex: 1;
 }
 
@@ -311,7 +317,7 @@ button { font-family: inherit; }
   cursor: pointer;
   transition: var(--transition);
   font-size: 14px;
-  min-height: 44px; /* ✅ acessibilidade/touch */
+  min-height: 44px;
 }
 
 .btn:hover {
@@ -354,7 +360,7 @@ button { font-family: inherit; }
   padding: 14px 16px;
   border-top: 1px solid rgba(255, 255, 255, 0.06);
   transition: var(--transition);
-  flex-wrap: wrap; /* ✅ melhor no mobile */
+  flex-wrap: wrap;
 }
 
 :root[data-theme="light"] .row { border-top: 1px solid rgba(0, 0, 0, 0.06); }
@@ -450,15 +456,16 @@ button { font-family: inherit; }
 :root[data-theme="light"] .table tr + tr td { border-top: 1px solid rgba(0, 0, 0, 0.06); }
 
 /* ---------------------------
-   NAV (Bottom Dock)
+   NAV (Bottom Dock) ✅ CORRIGIDO
 --------------------------- */
 .nav {
   position: fixed;
   left: 50%;
   transform: translateX(-50%);
-  bottom: 10px;
+  /* ✅ mais robusto: garante “respiro” mesmo quando safe-area = 0 */
+  bottom: max(calc(var(--nav-gap) + var(--safeBottom)), 12px);
   width: min(var(--maxw), calc(100% - 20px));
-  padding: 10px 10px calc(10px + var(--safeBottom));
+  padding: 10px 10px;
 
   display: flex;
   gap: 8px;
@@ -473,7 +480,7 @@ button { font-family: inherit; }
 
   box-shadow: var(--shadow);
   z-index: 60;
-  min-height: 60px; /* ✅ melhor toque */
+  min-height: var(--nav-h);
 }
 
 :root[data-theme="light"] .nav {
@@ -499,7 +506,7 @@ button { font-family: inherit; }
   cursor: pointer;
   transition: var(--transition);
   font-size: 11px;
-  min-height: 48px;
+  min-height: 52px;
 }
 
 .nav__item:hover { background: rgba(255, 255, 255, 0.06); }
@@ -512,7 +519,7 @@ button { font-family: inherit; }
 }
 
 .nav__icon { font-size: 18px; line-height: 1; }
-.nav__label { font-size: 11px; font-weight: 950; }
+.nav__label { font-size: 11px; font-weight: 950; line-height: 1.1; }
 
 @media (max-width: 380px) {
   .nav__label { font-size: 10px; }
@@ -540,7 +547,7 @@ button { font-family: inherit; }
   position: fixed;
   left: 50%;
   transform: translateX(-50%) translateY(10px);
-  bottom: calc(92px + var(--safeBottom));
+  bottom: calc(var(--nav-h) + 20px + var(--safeBottom));
   background: rgba(0, 0, 0, 0.76);
   color: rgba(255, 255, 255, 0.92);
   border: 1px solid rgba(255, 255, 255, 0.14);
@@ -563,6 +570,7 @@ button { font-family: inherit; }
   border: 1px solid rgba(0, 0, 0, 0.10);
 }
 
+/* ✅ mantém o translateX(-50%) consistente (evita “pulo” em alguns browsers) */
 .dl-toast.is-visible { opacity: 1; transform: translateX(-50%) translateY(0); }
 .dl-toast--success { border-color: rgba(46, 229, 157, 0.35); }
 .dl-toast--error { border-color: rgba(255, 93, 93, 0.35); }
@@ -593,7 +601,7 @@ button { font-family: inherit; }
   outline: none;
   transition: var(--transition);
   font-size: 14px;
-  min-height: 44px; /* ✅ touch */
+  min-height: 44px;
 }
 
 .input::placeholder { color: rgba(255, 255, 255, 0.42); }
@@ -613,7 +621,6 @@ button { font-family: inherit; }
   padding-right: 36px;
 }
 
-/* ✅ seta visível no tema claro (SEM \") */
 :root[data-theme="light"] .select {
   background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%23000' d='M6 9L1 4h10z'/%3E%3C/svg%3E");
 }
@@ -626,8 +633,8 @@ button { font-family: inherit; }
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  padding: 14px 14px; /* ✅ mais respiro */
-  min-height: 60px;    /* ✅ toque melhor */
+  padding: 14px 14px;
+  min-height: 60px;
   border-radius: 18px;
   border: 1px solid var(--stroke);
   background: rgba(255, 255, 255, 0.05);
@@ -643,26 +650,7 @@ button { font-family: inherit; }
   flex-direction: column;
   gap: 3px;
 }
-@media (max-width: 420px) {
-  .prodmeta b {
-    white-space: normal;
-    overflow: visible;
-    text-overflow: unset;
-    display: -webkit-box;
-    -webkit-line-clamp: 2;   /* Safari/Chrome */
-    line-clamp: 2;           /* padrão (aviso do VS Code) */
-    -webkit-box-orient: vertical;
-  }
-}
 
-.prodmeta span {
-  font-size: 12px;
-  color: var(--muted);
-  white-space: normal; /* ✅ pode quebrar */
-  overflow: visible;
-}
-
-/* Mobile: permitir nome em até 2 linhas quando necessário */
 @media (max-width: 420px) {
   .prodmeta b {
     white-space: normal;
@@ -670,8 +658,16 @@ button { font-family: inherit; }
     text-overflow: unset;
     display: -webkit-box;
     -webkit-line-clamp: 2;
+    line-clamp: 2;
     -webkit-box-orient: vertical;
   }
+}
+
+.prodmeta span {
+  font-size: 12px;
+  color: var(--muted);
+  white-space: normal;
+  overflow: visible;
 }
 
 /* Quantity Controls */
@@ -688,8 +684,8 @@ button { font-family: inherit; }
 :root[data-theme="light"] .qty { background: rgba(0, 0, 0, 0.04); }
 
 .qbtn {
-  width: 38px;   /* ✅ maior */
-  height: 38px;  /* ✅ maior */
+  width: 38px;
+  height: 38px;
   border-radius: 999px;
   border: 1px solid var(--stroke);
   background: rgba(255, 255, 255, 0.06);

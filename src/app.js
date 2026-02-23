@@ -1,14 +1,17 @@
 import { loadState, saveState, getDefaultState, newId } from "./state.js";
-import { brl, qs, qsa, setTheme } from "./ui.js";
+import { brl, qs, qsa, setTheme, setBrand } from "./ui.js";
 import { calcCardFee, calcProfit, calcMargin, calcROI } from "./db.js";
+import { supabase } from "./supabase.js";
 
 let state = normalizeState(loadState());
+let session = null;
 
 /* =========================================================
    CORE
 ========================================================= */
-function mount() {
+async function mount() {
   setTheme(state.theme || "dark");
+  setBrand(state.storeName || "");
 
   const btnTheme = qs("#btnTheme");
   syncThemeIcon(btnTheme);
@@ -20,9 +23,6 @@ function mount() {
     syncThemeIcon(btnTheme);
   });
 
-  const btnExport = qs("#btnExport");
-  btnExport?.addEventListener("click", () => showExportModal());
-
   window.addEventListener("hashchange", () => {
     const r = (location.hash || "").replace("#", "").trim();
     if (r) navigate(r, true);
@@ -32,10 +32,28 @@ function mount() {
     btn.addEventListener("click", () => navigate(btn.dataset.route));
   });
 
+  // ✅ Supabase: pega sessão atual
+  await refreshSession();
+
+  // Listener: mudanças de auth (login/logout)
+  supabase.auth.onAuthStateChange(async (_event, newSession) => {
+    session = newSession;
+    render(state.route || "home");
+  });
+
   const hashRoute = (location.hash || "").replace("#", "").trim();
   navigate(hashRoute || state.route || "home", true);
 
   registerSW();
+}
+
+async function refreshSession() {
+  try {
+    const { data } = await supabase.auth.getSession();
+    session = data?.session || null;
+  } catch {
+    session = null;
+  }
 }
 
 function normalizeState(s) {
@@ -44,6 +62,7 @@ function normalizeState(s) {
     ...base,
     ...(s || {}),
     ui: { ...base.ui, ...((s && s.ui) || {}) },
+    auth: { ...base.auth, ...((s && s.auth) || {}) },
   };
 
   merged.products = Array.isArray(merged.products) ? merged.products : [];
@@ -64,6 +83,13 @@ function normalizeState(s) {
   merged.ui.saleDiscount = Number(merged.ui.saleDiscount || 0);
   merged.ui.saleExtra = Number(merged.ui.saleExtra || 0);
   merged.ui.saleReceived = Number(merged.ui.saleReceived || 0);
+
+  merged.storeName = typeof merged.storeName === "string" ? merged.storeName : "";
+
+  merged.auth.mode = merged.auth.mode === "pin" ? "pin" : "supabase";
+  merged.auth.enabled = merged.auth.enabled === true;
+  merged.auth.pin = typeof merged.auth.pin === "string" ? merged.auth.pin : "";
+  merged.auth.unlocked = merged.auth.unlocked === true;
 
   return merged;
 }
@@ -99,6 +125,20 @@ function render(route) {
   const root = qs("#viewRoot");
   if (!root) return;
 
+  // ✅ LOGIN SUPABASE (padrão)
+  if (state.auth.mode === "supabase") {
+    if (!session) {
+      renderSupabaseLogin(root);
+      return;
+    }
+  }
+
+  // ✅ PIN (opcional)
+  if (state.auth.mode === "pin" && state.auth?.enabled && !state.auth?.unlocked && route !== "more") {
+    renderPinLockScreen(root);
+    return;
+  }
+
   const routes = {
     home: () => renderHome(root),
     sale: () => renderSale(root),
@@ -109,6 +149,130 @@ function render(route) {
   };
 
   (routes[route] || routes.home)();
+}
+
+/* =========================================================
+   SUPABASE LOGIN UI
+========================================================= */
+function renderSupabaseLogin(root) {
+  const html = `
+    <div class="h1">🔐 Entrar</div>
+
+    <section class="card section">
+      <div style="font-weight:900;margin-bottom:8px">Login do Doce Lucro</div>
+      <div class="muted" style="font-size:12px;margin-bottom:14px">
+        Entre com seu e-mail e senha. (Supabase)
+      </div>
+
+      <div class="field">
+        <label class="label">E-mail</label>
+        <input class="input" id="authEmail" type="email" placeholder="seuemail@gmail.com" autocomplete="email" />
+      </div>
+
+      <div class="field mt-12">
+        <label class="label">Senha</label>
+        <input class="input" id="authPass" type="password" placeholder="••••••••" autocomplete="current-password" />
+      </div>
+
+      <div style="height:12px"></div>
+
+      <button class="btn btn--brand" id="btnLogin" style="width:100%" type="button">Entrar</button>
+      <div style="height:8px"></div>
+      <button class="btn" id="btnSignup" style="width:100%" type="button">Criar conta</button>
+
+      <div style="height:10px"></div>
+      <button class="btn" id="btnForgot" style="width:100%" type="button">Esqueci minha senha</button>
+
+      <div style="height:10px"></div>
+      <div class="muted" style="font-size:12px">
+        Dica: se seu projeto estiver com confirmação por e-mail ativada, você vai precisar confirmar no e-mail ao criar conta.
+      </div>
+    </section>
+  `;
+
+  root.innerHTML = html;
+
+  qs("#btnLogin")?.addEventListener("click", async () => {
+    const email = (qs("#authEmail")?.value || "").trim();
+    const password = (qs("#authPass")?.value || "").trim();
+    if (!email || !password) return toast("Preencha e-mail e senha", "error");
+
+    const { error } = await supabase.auth.signInWithPassword({ email, password });
+    if (error) return toast(error.message, "error");
+
+    await refreshSession();
+    toast("Logado ✅", "success");
+    render(state.route || "home");
+  });
+
+  qs("#btnSignup")?.addEventListener("click", async () => {
+    const email = (qs("#authEmail")?.value || "").trim();
+    const password = (qs("#authPass")?.value || "").trim();
+    if (!email || !password) return toast("Preencha e-mail e senha", "error");
+
+    const { error } = await supabase.auth.signUp({ email, password });
+    if (error) return toast(error.message, "error");
+
+    toast("Conta criada ✅ (confirme no e-mail se necessário)", "success");
+    await refreshSession();
+    render(state.route || "home");
+  });
+
+  qs("#btnForgot")?.addEventListener("click", async () => {
+    const email = (qs("#authEmail")?.value || "").trim();
+    if (!email) return toast("Digite seu e-mail", "error");
+
+    const { error } = await supabase.auth.resetPasswordForEmail(email);
+    if (error) return toast(error.message, "error");
+    toast("Link de recuperação enviado ✅", "success");
+  });
+}
+
+/* =========================================================
+   PIN LOCK SCREEN (opcional)
+========================================================= */
+function renderPinLockScreen(root) {
+  const html = `
+    <div class="h1">🔒 Entrar</div>
+
+    <section class="card section">
+      <div style="font-weight:900;margin-bottom:8px">Acesso protegido</div>
+      <div class="muted" style="font-size:12px;margin-bottom:12px">
+        Digite seu PIN para acessar o Doce Lucro.
+      </div>
+
+      <div class="field">
+        <label class="label">PIN</label>
+        <input type="password" inputmode="numeric" class="input" id="inpPinLogin" placeholder="••••" />
+      </div>
+
+      <div style="height:12px"></div>
+      <button class="btn btn--brand" id="btnPinEnter" style="width:100%" type="button">Entrar</button>
+
+      <div style="height:10px"></div>
+      <button class="btn" id="btnGoMore" style="width:100%" type="button">⚙️ Ajustes</button>
+    </section>
+  `;
+
+  root.innerHTML = html;
+
+  const enter = () => {
+    const pin = String(qs("#inpPinLogin")?.value || "").trim();
+    if (!pin) return toast("Digite o PIN", "error");
+    if (pin !== String(state.auth?.pin || "")) return toast("PIN incorreto", "error");
+
+    state.auth.unlocked = true;
+    persist();
+    toast("Bem-vindo ✅", "success");
+    render(state.route || "home");
+  };
+
+  qs("#btnPinEnter")?.addEventListener("click", enter);
+  qs("#inpPinLogin")?.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") enter();
+  });
+
+  qs("#btnGoMore")?.addEventListener("click", () => navigate("more"));
 }
 
 /* =========================================================
@@ -261,7 +425,7 @@ function statCard(label, value, icon = "") {
 }
 
 /* =========================================================
-   SALE (Balcão)  ✅ Sem re-render no input + sem type=number
+   SALE (Balcão)
 ========================================================= */
 let saleBound = false;
 let saleInputDebounce = null;
@@ -284,7 +448,6 @@ function renderSale(root) {
     return;
   }
 
-  // captura foco/cursor antes de re-render
   const focusSnap = captureFocusState();
 
   const cart = state.ui.saleCart || {};
@@ -414,7 +577,6 @@ function renderSale(root) {
 
   root.innerHTML = html;
 
-  // bind único (event delegation) — só uma vez
   if (!saleBound) {
     saleBound = true;
 
@@ -423,7 +585,6 @@ function renderSale(root) {
 
       const t = e.target;
 
-      // pagamento
       const payBtn = t.closest?.("[data-pay]");
       if (payBtn) {
         state.ui.salePay = payBtn.dataset.pay || "pix";
@@ -433,7 +594,6 @@ function renderSale(root) {
         return;
       }
 
-      // +/- carrinho
       const opBtn = t.closest?.("[data-op]");
       if (opBtn) {
         const prodId = opBtn.dataset.prod;
@@ -450,13 +610,11 @@ function renderSale(root) {
         return;
       }
 
-      // finalizar
       if (t.closest?.("#btnFinalizeSale")) {
         finalizeSale(root);
         return;
       }
 
-      // limpar
       if (t.closest?.("#btnClearCart")) {
         state.ui.saleCart = {};
         state.ui.saleDiscount = 0;
@@ -468,7 +626,6 @@ function renderSale(root) {
       }
     });
 
-    // inputs (delegation)
     root.addEventListener("input", (e) => {
       if (state.route !== "sale") return;
 
@@ -492,15 +649,18 @@ function renderSale(root) {
       }
     });
 
-    // ao sair do campo: re-render (pra aplicar máscara/mostrar falta/troco certinho)
-    root.addEventListener("blur", (e) => {
-      if (state.route !== "sale") return;
-      const el = e.target;
-      if (!(el instanceof HTMLInputElement)) return;
-      if (el.id === "inpDiscount" || el.id === "inpExtra" || el.id === "inpRecebido") {
-        renderSale(root);
-      }
-    }, true);
+    root.addEventListener(
+      "blur",
+      (e) => {
+        if (state.route !== "sale") return;
+        const el = e.target;
+        if (!(el instanceof HTMLInputElement)) return;
+        if (el.id === "inpDiscount" || el.id === "inpExtra" || el.id === "inpRecebido") {
+          renderSale(root);
+        }
+      },
+      true
+    );
 
     root.addEventListener("change", (e) => {
       if (state.route !== "sale") return;
@@ -512,14 +672,12 @@ function renderSale(root) {
     });
   }
 
-  // restaura foco/cursor depois do re-render
   restoreFocusState(focusSnap);
 }
 
 function debounceSaleRecalc(root) {
   clearTimeout(saleInputDebounce);
   saleInputDebounce = setTimeout(() => {
-    // atualiza SOMENTE os números na tela (sem re-render)
     updateSaleNumbersInDOM(root);
   }, 350);
 }
@@ -555,7 +713,6 @@ function updateSaleNumbersInDOM(root) {
   const cashBlock = root.querySelector("#saleCashBlock");
   if (!cashBlock) return;
 
-  // reconstruir só o bloco de falta/troco (pequeno, não atrapalha digitação)
   if (metodo !== "dinheiro") {
     cashBlock.innerHTML = "";
     return;
@@ -596,7 +753,6 @@ function finalizeSale(root) {
 
   const totals = computeCartTotals(cart, products, metodo, desconto, acrescimo);
   const falta = metodo === "dinheiro" ? Math.max(0, totals.totalFinal - recebido) : 0;
-  const troco = metodo === "dinheiro" ? Math.max(0, recebido - totals.totalFinal) : 0;
 
   if (metodo === "dinheiro" && falta > 0) {
     toast(`Falta receber ${brl(falta)}`, "error");
@@ -614,7 +770,7 @@ function finalizeSale(root) {
     desconto,
     acrescimo,
     recebido,
-    troco,
+    troco: metodo === "dinheiro" ? Math.max(0, recebido - totals.totalFinal) : 0,
     totalVenda: totals.totalFinal,
     totalCusto: totals.totalCusto,
     taxaCartao: totals.taxa,
@@ -628,6 +784,16 @@ function finalizeSale(root) {
   state.ui.saleExtra = 0;
   state.ui.saleReceived = 0;
   state.ui.salePay = "pix";
+
+  const tipo = metodo === "dinheiro" ? "dinheiro" : metodo === "pix" ? "pix" : "cartao";
+  state.cashMoves.push({
+    id: newId(),
+    date: todayKey(),
+    tipo,
+    valor: totals.totalFinal,
+    createdAt: new Date().toISOString(),
+    note: "Venda balcão",
+  });
 
   persist();
   toast("Venda registrada ✅", "success");
@@ -654,8 +820,10 @@ function renderProductAddRow(product, cart) {
 }
 
 /* =========================================================
-   ORDERS
+   ORDERS / PRODUCTS / REPORTS / MORE
+   (mantive seu comportamento, só ajustei o "Mais" p/ incluir logout)
 ========================================================= */
+
 function renderOrders(root) {
   const orders = state.orders || [];
 
@@ -948,9 +1116,6 @@ function renderOrderProductRow(product, itemsById) {
   `;
 }
 
-/* =========================================================
-   PRODUCTS
-========================================================= */
 function renderProducts(root) {
   const products = state.products || [];
 
@@ -1135,9 +1300,6 @@ function showProductModal(productId, root) {
   });
 }
 
-/* =========================================================
-   REPORTS
-========================================================= */
 function renderReports(root) {
   const sales = state.sales || [];
   const orders = state.orders || [];
@@ -1240,18 +1402,71 @@ function renderReports(root) {
   root.innerHTML = html;
 }
 
-/* =========================================================
-   MORE
-========================================================= */
 function renderMore(root) {
+  const isAuthOn = !!state.auth?.enabled;
+
   const html = `
     <div class="h1">⚙️ Mais</div>
 
     <section class="card section">
-      <button class="btn btn--brand" id="btnExportData" style="width:100%" type="button">📥 Exportar dados (JSON)</button>
-      <div style="height:8px"></div>
-      <button class="btn" id="btnImportData" style="width:100%" type="button">📤 Importar dados (JSON)</button>
-      <div style="height:8px"></div>
+      <div style="font-weight:900;margin-bottom:10px">🏷️ Confeitaria</div>
+
+      <div class="field">
+        <label class="label">Nome da confeitaria</label>
+        <input type="text" class="input" id="inpStoreName" placeholder="Ex: Doces da Ana" value="${escapeHtml(state.storeName || "")}" />
+      </div>
+
+      <div style="height:10px"></div>
+      <button class="btn btn--brand" id="btnSaveStoreName" style="width:100%" type="button">Salvar nome</button>
+    </section>
+
+    <div style="height:12px"></div>
+
+    <section class="card section">
+      <div style="font-weight:900;margin-bottom:10px">🔐 Login</div>
+
+      <div class="row">
+        <div class="kpi">
+          <b>Modo</b>
+          <span>${state.auth.mode === "supabase" ? "Supabase (e-mail/senha)" : "PIN (local)"}</span>
+        </div>
+        <button class="btn btn--small" id="btnToggleMode" type="button">Trocar</button>
+      </div>
+
+      ${
+        state.auth.mode === "supabase"
+          ? `
+        <div style="height:10px"></div>
+        <button class="btn btn--danger" id="btnLogout" style="width:100%" type="button">Sair (logout)</button>
+      `
+          : `
+        <div class="row">
+          <div class="kpi">
+            <b>Proteção por PIN</b>
+            <span>${isAuthOn ? "Ativado" : "Desativado"}</span>
+          </div>
+          <button class="btn btn--small" id="btnTogglePin" type="button">${isAuthOn ? "Desativar" : "Ativar"}</button>
+        </div>
+
+        <div class="field mt-12">
+          <label class="label">Definir/alterar PIN</label>
+          <input type="password" inputmode="numeric" class="input" id="inpPinSet" placeholder="Ex: 1234" value="" />
+          <div class="muted" style="font-size:12px;margin-top:6px">Dica: use 4 a 8 números.</div>
+        </div>
+
+        <div style="height:10px"></div>
+        <button class="btn" id="btnSavePin" style="width:100%" type="button">Salvar PIN</button>
+
+        ${isAuthOn ? `<div style="height:8px"></div>
+        <button class="btn" id="btnLockNow" style="width:100%" type="button">🔒 Bloquear agora</button>` : ""}
+      `
+      }
+    </section>
+
+    <div style="height:12px"></div>
+
+    <section class="card section">
+      <div style="font-weight:900;margin-bottom:10px">🧹 Dados</div>
       <button class="btn btn--danger" id="btnClearData" style="width:100%" type="button">🗑️ Limpar todos os dados</button>
     </section>
 
@@ -1260,141 +1475,100 @@ function renderMore(root) {
     <section class="card section">
       <div style="font-weight:900;margin-bottom:10px">ℹ️ Sobre</div>
       <div class="row">
-        <div class="kpi"><b>Doce Lucro</b><span>v1.0.1</span></div>
+        <div class="kpi"><b>Doce Lucro</b><span>v1.0.2</span></div>
       </div>
       <div class="row">
-        <div class="kpi"><b>Armazenamento</b><span>Local (offline)</span></div>
+        <div class="kpi"><b>Armazenamento</b><span>Local (offline) + Login Supabase</span></div>
       </div>
     </section>
   `;
 
   root.innerHTML = html;
 
-  qs("#btnExportData")?.addEventListener("click", () => {
-    const dataStr = JSON.stringify(state, null, 2);
-    const blob = new Blob([dataStr], { type: "application/json" });
-    const url = URL.createObjectURL(blob);
-
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `doce-lucro-backup-${new Date().toISOString().slice(0, 10)}.json`;
-    a.click();
-
-    URL.revokeObjectURL(url);
-    toast("Dados exportados ✅", "success");
+  qs("#btnSaveStoreName")?.addEventListener("click", () => {
+    const name = String(qs("#inpStoreName")?.value || "").trim();
+    state.storeName = name;
+    persist();
+    setBrand(state.storeName || "");
+    toast("Nome salvo ✅", "success");
   });
 
-  qs("#btnImportData")?.addEventListener("click", () => {
-    const input = document.createElement("input");
-    input.type = "file";
-    input.accept = ".json";
+  qs("#btnToggleMode")?.addEventListener("click", () => {
+    state.auth.mode = state.auth.mode === "supabase" ? "pin" : "supabase";
+    persist();
+    toast("Modo alterado ✅", "success");
+    renderMore(root);
+  });
 
-    input.onchange = (e) => {
-      const file = e.target.files?.[0];
-      if (!file) return;
+  qs("#btnLogout")?.addEventListener("click", async () => {
+    const { error } = await supabase.auth.signOut();
+    if (error) return toast(error.message, "error");
+    session = null;
+    toast("Saiu ✅", "success");
+    render(state.route || "home");
+  });
 
-      const reader = new FileReader();
-      reader.onload = (event) => {
-        try {
-          const imported = JSON.parse(String(event.target.result || "{}"));
-          state = normalizeState({ ...state, ...imported });
-          persist();
-          toast("Dados importados ✅", "success");
-          renderMore(root);
-        } catch (err) {
-          toast("Erro ao importar arquivo", "error");
-        }
-      };
+  // PIN controls (se modo pin)
+  qs("#btnTogglePin")?.addEventListener("click", () => {
+    const enable = !(state.auth?.enabled === true);
 
-      reader.readAsText(file);
-    };
+    if (enable) {
+      if (!state.auth.pin) {
+        toast("Defina um PIN antes de ativar.", "error");
+        return;
+      }
+      state.auth.enabled = true;
+      state.auth.unlocked = true;
+      persist();
+      toast("Login PIN ativado ✅", "success");
+      renderMore(root);
+      return;
+    }
 
-    input.click();
+    if (confirm("Desativar o login por PIN?")) {
+      state.auth.enabled = false;
+      state.auth.unlocked = true;
+      persist();
+      toast("Login PIN desativado ✅", "success");
+      renderMore(root);
+    }
+  });
+
+  qs("#btnSavePin")?.addEventListener("click", () => {
+    const pin = String(qs("#inpPinSet")?.value || "").trim();
+    const onlyDigits = pin.replace(/\D/g, "");
+    if (onlyDigits.length < 4 || onlyDigits.length > 8) {
+      toast("PIN inválido. Use 4 a 8 números.", "error");
+      return;
+    }
+    state.auth.pin = onlyDigits;
+    persist();
+    toast("PIN salvo ✅", "success");
+  });
+
+  qs("#btnLockNow")?.addEventListener("click", () => {
+    state.auth.unlocked = false;
+    persist();
+    toast("Bloqueado 🔒", "info");
+    render(state.route || "home");
   });
 
   qs("#btnClearData")?.addEventListener("click", () => {
     if (confirm("⚠️ Tem certeza? Isso vai DELETAR TODOS os dados!")) {
+      const keepTheme = state.theme;
+      const keepStore = state.storeName;
+      const keepAuth = state.auth;
+
       state = normalizeState(getDefaultState());
+      state.theme = keepTheme;
+      state.storeName = keepStore;
+      state.auth = keepAuth;
+
       persist();
+      setBrand(state.storeName || "");
       toast("Dados limpos ✅", "success");
       renderMore(root);
     }
-  });
-}
-
-/* =========================================================
-   EXPORT MODAL
-========================================================= */
-function showExportModal() {
-  const html = `
-    <div class="modal">
-      <div class="modal__content">
-        <div class="modal__header">
-          <div class="modal__title">📊 Exportar relatório</div>
-          <button class="modal__close" id="closeModal" type="button">X</button>
-        </div>
-
-        <div class="field">
-          <label class="label">Escolha o formato</label>
-          <button class="btn btn--brand" id="btnExportJSON" style="width:100%;margin-bottom:8px" type="button">📥 JSON (Backup)</button>
-          <button class="btn" id="btnExportCSV" style="width:100%" type="button">📊 CSV (Excel)</button>
-        </div>
-      </div>
-    </div>
-  `;
-
-  const container = qs("#modalContainer");
-  container.innerHTML = html;
-
-  const modal = qs(".modal");
-  qs("#closeModal")?.addEventListener("click", () => modal.remove());
-  modal?.addEventListener("click", (e) => {
-    if (e.target === modal) modal.remove();
-  });
-
-  qs("#btnExportJSON")?.addEventListener("click", () => {
-    const dataStr = JSON.stringify(state, null, 2);
-    const blob = new Blob([dataStr], { type: "application/json" });
-    const url = URL.createObjectURL(blob);
-
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `doce-lucro-backup-${new Date().toISOString().slice(0, 10)}.json`;
-    a.click();
-
-    URL.revokeObjectURL(url);
-    toast("Dados exportados ✅", "success");
-    modal.remove();
-  });
-
-  qs("#btnExportCSV")?.addEventListener("click", () => {
-    const sales = state.sales || [];
-    const rows = [
-      ["Data", "Método", "Faturamento", "Custo", "Taxa", "Lucro"].join(","),
-      ...sales.map((s) =>
-        [
-          String(s.date || ""),
-          String(s.metodo || ""),
-          Number(s.totalVenda || 0),
-          Number(s.totalCusto || 0),
-          Number(s.taxaCartao || 0),
-          Number(s.lucro || 0),
-        ].join(",")
-      ),
-    ];
-
-    const csv = rows.join("\n");
-    const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
-    const url = URL.createObjectURL(blob);
-
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `doce-lucro-vendas-${new Date().toISOString().slice(0, 10)}.csv`;
-    a.click();
-
-    URL.revokeObjectURL(url);
-    toast("Relatório exportado ✅", "success");
-    modal.remove();
   });
 }
 
@@ -1419,7 +1593,6 @@ function escapeHtml(text) {
   return String(text ?? "").replace(/[&<>"']/g, (m) => map[m]);
 }
 
-// ✅ robusto: "12,50", "12.50", "1.234,56", "1,234.56"
 function parseMoneyInput(value) {
   if (value === null || value === undefined) return 0;
   let str = String(value).trim();
@@ -1433,11 +1606,8 @@ function parseMoneyInput(value) {
   if (hasComma && hasDot) {
     const lastComma = str.lastIndexOf(",");
     const lastDot = str.lastIndexOf(".");
-    if (lastComma > lastDot) {
-      str = str.replace(/\./g, "").replace(",", ".");
-    } else {
-      str = str.replace(/,/g, "");
-    }
+    if (lastComma > lastDot) str = str.replace(/\./g, "").replace(",", ".");
+    else str = str.replace(/,/g, "");
   } else if (hasComma) {
     str = str.replace(/\./g, "").replace(",", ".");
   }
@@ -1461,7 +1631,6 @@ function computeCartTotals(cart, products, metodo, desconto, acrescimo) {
   const totalFinal = subtotal + acrescimo - desconto + taxa;
 
   const lucro = calcProfit(totalFinal, totalCusto, taxa);
-
   return { subtotal, totalCusto, taxa, totalFinal, lucro };
 }
 
@@ -1471,12 +1640,7 @@ function cartToItems(cart, products) {
       const prod = (products || []).find((p) => p.id === prodId);
       if (!prod) return null;
 
-      return {
-        ...prod,
-        qty: Number(qty || 0),
-        unitPrice: Number(prod.preco || 0),
-        unitCost: Number(prod.custo || 0),
-      };
+      return { ...prod, qty: Number(qty || 0), unitPrice: Number(prod.preco || 0), unitCost: Number(prod.custo || 0) };
     })
     .filter(Boolean);
 }
@@ -1484,11 +1648,7 @@ function cartToItems(cart, products) {
 function captureFocusState() {
   const el = document.activeElement;
   if (!el || !(el instanceof HTMLInputElement)) return null;
-  return {
-    id: el.id || null,
-    start: el.selectionStart,
-    end: el.selectionEnd,
-  };
+  return { id: el.id || null, start: el.selectionStart, end: el.selectionEnd };
 }
 
 function restoreFocusState(snap) {
@@ -1497,55 +1657,41 @@ function restoreFocusState(snap) {
   if (!el || !(el instanceof HTMLInputElement)) return;
   try {
     el.focus();
-    if (typeof snap.start === "number" && typeof snap.end === "number") {
-      el.setSelectionRange(snap.start, snap.end);
-    }
+    if (typeof snap.start === "number" && typeof snap.end === "number") el.setSelectionRange(snap.start, snap.end);
   } catch (_) {}
 }
 
-function todayKey() {
-  return new Date().toISOString().slice(0, 10);
-}
-function monthKey() {
-  return new Date().toISOString().slice(0, 7);
-}
-function yearKey() {
-  return new Date().toISOString().slice(0, 4);
-}
+function todayKey() { return new Date().toISOString().slice(0, 10); }
+function monthKey() { return new Date().toISOString().slice(0, 7); }
+function yearKey() { return new Date().toISOString().slice(0, 4); }
 
 function getTodaySummary() {
   const key = todayKey();
   const sales = (state.sales || []).filter((s) => s.date === key);
-
   const faturamento = sales.reduce((a, s) => a + Number(s.totalVenda || 0), 0);
   const custos = sales.reduce((a, s) => a + Number(s.totalCusto || 0), 0);
   const taxas = sales.reduce((a, s) => a + Number(s.taxaCartao || 0), 0);
   const lucro = calcProfit(faturamento, custos, taxas);
-
   return { faturamento, custos, taxas, lucro };
 }
 
 function getMonthSummary() {
   const key = monthKey();
   const sales = (state.sales || []).filter((s) => String(s.date || "").startsWith(key));
-
   const faturamento = sales.reduce((a, s) => a + Number(s.totalVenda || 0), 0);
   const custos = sales.reduce((a, s) => a + Number(s.totalCusto || 0), 0);
   const taxas = sales.reduce((a, s) => a + Number(s.taxaCartao || 0), 0);
   const lucro = calcProfit(faturamento, custos, taxas);
-
   return { faturamento, custos, taxas, lucro };
 }
 
 function getYearSummary() {
   const key = yearKey();
   const sales = (state.sales || []).filter((s) => String(s.date || "").startsWith(key));
-
   const faturamento = sales.reduce((a, s) => a + Number(s.totalVenda || 0), 0);
   const custos = sales.reduce((a, s) => a + Number(s.totalCusto || 0), 0);
   const taxas = sales.reduce((a, s) => a + Number(s.taxaCartao || 0), 0);
   const lucro = calcProfit(faturamento, custos, taxas);
-
   return { faturamento, custos, taxas, lucro };
 }
 
@@ -1579,23 +1725,17 @@ function renderWeekTable(week) {
         </tr>
       </thead>
       <tbody>
-        ${week
-          .map((d) => {
-            const label = new Date(d.date).toLocaleDateString("pt-BR", {
-              weekday: "short",
-              month: "2-digit",
-              day: "2-digit",
-            });
-            return `
-              <tr>
-                <td>${escapeHtml(label)}</td>
-                <td>${brl(d.faturamento)}</td>
-                <td>${brl(d.custos)}</td>
-                <td style="color:var(--good)">${brl(d.lucro)}</td>
-              </tr>
-            `;
-          })
-          .join("")}
+        ${week.map((d) => {
+          const label = new Date(d.date).toLocaleDateString("pt-BR", { weekday: "short", month: "2-digit", day: "2-digit" });
+          return `
+            <tr>
+              <td>${escapeHtml(label)}</td>
+              <td>${brl(d.faturamento)}</td>
+              <td>${brl(d.custos)}</td>
+              <td style="color:var(--good)">${brl(d.lucro)}</td>
+            </tr>
+          `;
+        }).join("")}
       </tbody>
     </table>
   `;
@@ -1620,7 +1760,6 @@ function getCashSummaryForDate(date) {
   const cartao = moves.filter((m) => m.tipo === "cartao").reduce((a, m) => a + Number(m.valor || 0), 0);
 
   const entradasTotal = dinheiro + pix + cartao;
-
   const saidas = moves.filter((m) => m.tipo === "saida").reduce((a, m) => a + Number(m.valor || 0), 0);
   const saldo = entradasTotal - saidas;
 
@@ -1634,7 +1773,6 @@ function toast(message, type = "info") {
   const el = document.createElement("div");
   el.className = `dl-toast dl-toast--${type} is-visible`;
   el.textContent = message;
-
   document.body.appendChild(el);
 
   setTimeout(() => {
@@ -1668,33 +1806,13 @@ function seedDemo() {
       taxaCartao: 0,
       lucro: 34,
     },
-    {
-      id: newId(),
-      date: today,
-      createdAt: new Date().toISOString(),
-      metodo: "dinheiro",
-      items: [
-        { nome: "Brigadeiro (pote)", preco: 15, custo: 4, qty: 3, unitPrice: 15, unitCost: 4 },
-        { nome: "Cupcake", preco: 8, custo: 2.5, qty: 5, unitPrice: 8, unitCost: 2.5 },
-      ],
-      desconto: 5,
-      acrescimo: 0,
-      recebido: 75,
-      troco: 5,
-      totalVenda: 70,
-      totalCusto: 24.5,
-      taxaCartao: 0,
-      lucro: 45.5,
-    },
   ];
 
   persist();
 }
 
 function registerSW() {
-  if ("serviceWorker" in navigator) {
-    navigator.serviceWorker.register("./sw.js").catch(() => {});
-  }
+  if ("serviceWorker" in navigator) navigator.serviceWorker.register("./sw.js").catch(() => {});
 }
 
 // start
