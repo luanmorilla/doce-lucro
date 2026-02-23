@@ -5,10 +5,9 @@ import { calcCardFee, calcProfit, calcMargin, calcROI } from "./db.js";
 let state = normalizeState(loadState());
 
 /* =========================================================
-   MOUNT + DELEGATION (1x)
+   CORE
 ========================================================= */
 function mount() {
-  // tema inicial
   setTheme(state.theme || "dark");
 
   const btnTheme = qs("#btnTheme");
@@ -24,23 +23,14 @@ function mount() {
   const btnExport = qs("#btnExport");
   btnExport?.addEventListener("click", () => showExportModal());
 
-  // navegação via hash
   window.addEventListener("hashchange", () => {
     const r = (location.hash || "").replace("#", "").trim();
     if (r) navigate(r, true);
   });
 
-  // nav dock (ok manter)
   qsa(".nav__item").forEach((btn) => {
     btn.addEventListener("click", () => navigate(btn.dataset.route));
   });
-
-  // delegation principal (1x)
-  const root = qs("#viewRoot");
-  if (root) bindRootDelegation(root);
-
-  const modalContainer = qs("#modalContainer");
-  if (modalContainer) bindModalDelegation(modalContainer);
 
   const hashRoute = (location.hash || "").replace("#", "").trim();
   navigate(hashRoute || state.route || "home", true);
@@ -48,485 +38,23 @@ function mount() {
   registerSW();
 }
 
-function bindRootDelegation(root) {
-  // CLICK: ações por rota / id / data-*
-  root.addEventListener("click", (ev) => {
-    const t = ev.target;
-    if (!(t instanceof Element)) return;
-
-    // HOME
-    if (state.route === "home") {
-      if (t.closest("#btnQuickSale")) return navigate("sale");
-      if (t.closest("#btnSeedDemo")) {
-        seedDemo();
-        toast("Dados demo inseridos ✅", "success");
-        return renderHome(root);
-      }
-      if (t.closest("#btnEditMeta")) {
-        const atual = Number(state.metaMensal || 0);
-        const v = prompt("Defina sua meta de LUCRO do mês (em R$). Ex: 3000", String(atual));
-        if (v === null) return;
-        const num = parseMoneyInput(v);
-        if (!Number.isFinite(num) || num < 0) {
-          toast("Valor inválido. Use um número como 3000.", "error");
-          return;
-        }
-        state.mesRef = monthKey();
-        state.metaMensal = num;
-        persist();
-        toast("Meta atualizada ✅", "success");
-        return renderHome(root);
-      }
-    }
-
-    // SALE
-    if (state.route === "sale") {
-      const payBtn = t.closest("[data-pay]");
-      if (payBtn) {
-        const pay = String(payBtn.getAttribute("data-pay") || "pix");
-        state.ui.salePay = pay || "pix";
-        state.ui.saleReceived = 0;
-        persist();
-        // troca pagamento pode criar/remover input recebido => re-render, com foco preservado
-        return renderSale(root);
-      }
-
-      const opBtn = t.closest("[data-op]");
-      if (opBtn) {
-        const prodId = String(opBtn.getAttribute("data-prod") || "");
-        const op = String(opBtn.getAttribute("data-op") || "");
-        if (!prodId) return;
-
-        const cart = state.ui.saleCart || {};
-        const qty = cart[prodId] || 0;
-
-        cart[prodId] = op === "plus" ? qty + 1 : Math.max(0, qty - 1);
-        if (cart[prodId] === 0) delete cart[prodId];
-
-        state.ui.saleCart = cart;
-        persist();
-        return renderSale(root);
-      }
-
-      if (t.closest("#btnFinalizeSale")) {
-        const products = state.products || [];
-        const cart = state.ui.saleCart || {};
-        const metodo = state.ui.salePay || "pix";
-        const desconto = Number(state.ui.saleDiscount || 0);
-        const acrescimo = Number(state.ui.saleExtra || 0);
-        const recebido = Number(state.ui.saleReceived || 0);
-
-        if (Object.keys(cart).length === 0) {
-          toast("Carrinho vazio!", "error");
-          return;
-        }
-
-        const totals = computeCartTotals(cart, products, metodo, desconto, acrescimo);
-        const falta = metodo === "dinheiro" ? Math.max(0, totals.totalFinal - recebido) : 0;
-        const troco = metodo === "dinheiro" ? Math.max(0, recebido - totals.totalFinal) : 0;
-
-        if (metodo === "dinheiro" && falta > 0) {
-          toast(`Falta receber ${brl(falta)}`, "error");
-          return;
-        }
-
-        const items = cartToItems(cart, products);
-
-        const venda = {
-          id: newId(),
-          date: todayKey(),
-          createdAt: new Date().toISOString(),
-          metodo,
-          items,
-          desconto,
-          acrescimo,
-          recebido,
-          troco,
-          totalVenda: totals.totalFinal,
-          totalCusto: totals.totalCusto,
-          taxaCartao: totals.taxa,
-          lucro: totals.lucro,
-        };
-
-        state.sales.push(venda);
-
-        // reset ui
-        state.ui.saleCart = {};
-        state.ui.saleDiscount = 0;
-        state.ui.saleExtra = 0;
-        state.ui.saleReceived = 0;
-        state.ui.salePay = "pix";
-
-        persist();
-        toast("Venda registrada ✅", "success");
-        return renderSale(root);
-      }
-
-      if (t.closest("#btnClearCart")) {
-        state.ui.saleCart = {};
-        state.ui.saleDiscount = 0;
-        state.ui.saleExtra = 0;
-        state.ui.saleReceived = 0;
-        persist();
-        return renderSale(root);
-      }
-
-      // empty-state CTA
-      if (t.closest("#goProducts")) return navigate("products");
-    }
-
-    // ORDERS
-    if (state.route === "orders") {
-      if (t.closest("#btnNewOrder")) return showOrderModal(null, root);
-
-      const orderBtn = t.closest("[data-order-id]");
-      if (orderBtn) {
-        const oid = String(orderBtn.getAttribute("data-order-id") || "");
-        const action = String(orderBtn.getAttribute("data-action") || "");
-        if (!oid) return;
-
-        if (action === "edit") return showOrderModal(oid, root);
-
-        if (action === "delete") {
-          if (confirm("Deletar encomenda?")) {
-            state.orders = (state.orders || []).filter((o) => o.id !== oid);
-            persist();
-            toast("Encomenda deletada ✅", "success");
-            return renderOrders(root);
-          }
-        }
-      }
-    }
-
-    // PRODUCTS
-    if (state.route === "products") {
-      if (t.closest("#btnNewProduct")) return showProductModal(null, root);
-
-      const prodBtn = t.closest("[data-prod-id]");
-      if (prodBtn) {
-        const pid = String(prodBtn.getAttribute("data-prod-id") || "");
-        const action = String(prodBtn.getAttribute("data-action") || "");
-        if (!pid) return;
-
-        if (action === "edit") return showProductModal(pid, root);
-
-        if (action === "delete") {
-          if (confirm("Deletar produto?")) {
-            state.products = (state.products || []).filter((p) => p.id !== pid);
-            persist();
-            toast("Produto deletado ✅", "success");
-            return renderProducts(root);
-          }
-        }
-      }
-    }
-
-    // MORE
-    if (state.route === "more") {
-      if (t.closest("#btnExportData")) {
-        const dataStr = JSON.stringify(state, null, 2);
-        const blob = new Blob([dataStr], { type: "application/json" });
-        const url = URL.createObjectURL(blob);
-
-        const a = document.createElement("a");
-        a.href = url;
-        a.download = `doce-lucro-backup-${new Date().toISOString().slice(0, 10)}.json`;
-        a.click();
-
-        URL.revokeObjectURL(url);
-        toast("Dados exportados ✅", "success");
-        return;
-      }
-
-      if (t.closest("#btnImportData")) {
-        const input = document.createElement("input");
-        input.type = "file";
-        input.accept = ".json";
-
-        input.onchange = (e) => {
-          const file = e.target.files?.[0];
-          if (!file) return;
-
-          const reader = new FileReader();
-          reader.onload = (event) => {
-            try {
-              const imported = JSON.parse(String(event.target.result || "{}"));
-              state = normalizeState({ ...state, ...imported });
-              persist();
-              toast("Dados importados ✅", "success");
-              renderMore(root);
-            } catch (_) {
-              toast("Erro ao importar arquivo", "error");
-            }
-          };
-
-          reader.readAsText(file);
-        };
-
-        input.click();
-        return;
-      }
-
-      if (t.closest("#btnClearData")) {
-        if (confirm("⚠️ Tem certeza? Isso vai DELETAR TODOS os dados!")) {
-          state = normalizeState(getDefaultState());
-          persist();
-          toast("Dados limpos ✅", "success");
-          renderMore(root);
-        }
-      }
-    }
-  });
-
-  // INPUT/CHANGE/BLUR: especialmente SALE (sem re-render no input)
-  const saleDebouncedUpdate = debounce(() => {
-    if (state.route !== "sale") return;
-    updateSaleSummaryDOM(root);
-  }, 380);
-
-  root.addEventListener("input", (ev) => {
-    if (state.route !== "sale") return;
-    const t = ev.target;
-    if (!(t instanceof HTMLInputElement)) return;
-
-    if (t.id === "inpDiscount") {
-      state.ui.saleDiscount = parseMoneyInput(t.value);
-      persist();
-      saleDebouncedUpdate();
-      return;
-    }
-    if (t.id === "inpExtra") {
-      state.ui.saleExtra = parseMoneyInput(t.value);
-      persist();
-      saleDebouncedUpdate();
-      return;
-    }
-    if (t.id === "inpRecebido") {
-      state.ui.saleReceived = parseMoneyInput(t.value);
-      persist();
-      saleDebouncedUpdate();
-      return;
-    }
-  });
-
-  root.addEventListener("change", (ev) => {
-    if (state.route !== "sale") return;
-    const t = ev.target;
-    if (!(t instanceof HTMLInputElement)) return;
-
-    if (t.id === "inpDiscount") {
-      state.ui.saleDiscount = parseMoneyInput(t.value);
-      persist();
-      // normaliza visual
-      t.value = formatMoneyInput(state.ui.saleDiscount);
-      updateSaleSummaryDOM(root);
-      return;
-    }
-    if (t.id === "inpExtra") {
-      state.ui.saleExtra = parseMoneyInput(t.value);
-      persist();
-      t.value = formatMoneyInput(state.ui.saleExtra);
-      updateSaleSummaryDOM(root);
-      return;
-    }
-    if (t.id === "inpRecebido") {
-      state.ui.saleReceived = parseMoneyInput(t.value);
-      persist();
-      t.value = formatMoneyInput(state.ui.saleReceived);
-      updateSaleSummaryDOM(root);
-      return;
-    }
-  });
-
-  root.addEventListener(
-    "blur",
-    (ev) => {
-      if (state.route !== "sale") return;
-      const t = ev.target;
-      if (!(t instanceof HTMLInputElement)) return;
-
-      // blur também normaliza e atualiza
-      if (t.id === "inpDiscount") {
-        state.ui.saleDiscount = parseMoneyInput(t.value);
-        persist();
-        t.value = formatMoneyInput(state.ui.saleDiscount);
-        updateSaleSummaryDOM(root);
-      }
-      if (t.id === "inpExtra") {
-        state.ui.saleExtra = parseMoneyInput(t.value);
-        persist();
-        t.value = formatMoneyInput(state.ui.saleExtra);
-        updateSaleSummaryDOM(root);
-      }
-      if (t.id === "inpRecebido") {
-        state.ui.saleReceived = parseMoneyInput(t.value);
-        persist();
-        t.value = formatMoneyInput(state.ui.saleReceived);
-        updateSaleSummaryDOM(root);
-      }
-    },
-    true
-  );
-}
-
-function bindModalDelegation(container) {
-  container.addEventListener("click", (ev) => {
-    const t = ev.target;
-    if (!(t instanceof Element)) return;
-
-    const modal = container.querySelector(".modal");
-    if (!modal) return;
-
-    // fechar
-    if (t.closest("#closeModal")) {
-      modal.remove();
-      return;
-    }
-    // click fora do conteúdo
-    if (t === modal) {
-      modal.remove();
-      return;
-    }
-
-    // Order modal: +/- (data-op)
-    const opBtn = t.closest("[data-op]");
-    if (opBtn && modal.getAttribute("data-modal") === "order") {
-      const prodId = String(opBtn.getAttribute("data-prod") || "");
-      const op = String(opBtn.getAttribute("data-op") || "");
-      const orderId = modal.getAttribute("data-order-id") || "";
-      if (!prodId) return;
-
-      const products = state.products || [];
-      const order = orderId ? (state.orders || []).find((o) => o.id === orderId) : null;
-      const isEdit = !!order;
-      const itemsById = isEdit ? order.itemsById || {} : state.ui.orderDraftItems || {};
-
-      const q = itemsById[prodId] || 0;
-      itemsById[prodId] = op === "plus" ? q + 1 : Math.max(0, q - 1);
-      if (itemsById[prodId] === 0) delete itemsById[prodId];
-
-      state.ui.orderDraftItems = itemsById;
-      persist();
-      // re-render modal (preserva foco)
-      showOrderModal(orderId || null, qs("#viewRoot"));
-      return;
-    }
-
-    // Order modal: salvar / deletar
-    if (modal.getAttribute("data-modal") === "order") {
-      if (t.closest("#btnSaveOrder")) {
-        const root = qs("#viewRoot");
-        const orderId = modal.getAttribute("data-order-id") || "";
-        const products = state.products || [];
-        const order = orderId ? (state.orders || []).find((o) => o.id === orderId) : null;
-        const isEdit = !!order;
-
-        const itemsById = isEdit ? order.itemsById || {} : state.ui.orderDraftItems || {};
-
-        const cliente = (qs("#inpCliente")?.value || "").trim();
-        const whats = (qs("#inpWhats")?.value || "").trim();
-        const dataRetirada = qs("#inpData")?.value || "";
-        const taxaEntrega = parseMoneyInput(qs("#inpTaxa")?.value || "0");
-        const sinal = parseMoneyInput(qs("#inpSinal")?.value || "0");
-        const status = qs("#selStatus")?.value || "aberta";
-
-        if (!cliente) return toast("Preencha o nome do cliente", "error");
-        if (Object.keys(itemsById).length === 0) return toast("Adicione pelo menos um produto", "error");
-
-        const items = cartToItems(itemsById, products);
-        const subtotal = items.reduce((a, i) => a + i.qty * i.unitPrice, 0);
-        const totalCusto = items.reduce((a, i) => a + i.qty * i.unitCost, 0);
-        const total = subtotal + taxaEntrega;
-
-        if (isEdit) {
-          const idx = (state.orders || []).findIndex((o) => o.id === orderId);
-          if (idx >= 0) {
-            state.orders[idx] = {
-              ...order,
-              cliente,
-              whats,
-              dataRetirada,
-              taxaEntrega,
-              sinal,
-              status,
-              itemsById,
-              items,
-              total,
-              totalCusto,
-              lucroEstimado: calcProfit(total, totalCusto, 0),
-            };
-          }
-        } else {
-          state.orders.push({
-            id: newId(),
-            createdAt: new Date().toISOString(),
-            status: "aberta",
-            cliente,
-            whats,
-            dataRetirada,
-            taxaEntrega,
-            sinal,
-            itemsById,
-            items,
-            total,
-            totalCusto,
-            lucroEstimado: calcProfit(total, totalCusto, 0),
-          });
-        }
-
-        state.ui.orderDraftItems = {};
-        persist();
-        modal.remove();
-        toast(`Encomenda ${isEdit ? "atualizada" : "criada"} ✅`, "success");
-        renderOrders(root);
-        return;
-      }
-
-      if (t.closest("#btnDeleteOrder")) {
-        const root = qs("#viewRoot");
-        const orderId = modal.getAttribute("data-order-id") || "";
-        if (!orderId) return;
-        if (confirm("Tem certeza que quer deletar esta encomenda?")) {
-          state.orders = (state.orders || []).filter((o) => o.id !== orderId);
-          persist();
-          modal.remove();
-          toast("Encomenda deletada ✅", "success");
-          renderOrders(root);
-        }
-        return;
-      }
-    }
-
-    // Product modal: salvar/deletar (mantém listeners locais, então aqui não precisa)
-  });
-}
-
-/* =========================================================
-   STATE
-========================================================= */
 function normalizeState(s) {
   const base = getDefaultState();
-
-  // merge raso + garantir sub-objetos
   const merged = {
     ...base,
     ...(s || {}),
     ui: { ...base.ui, ...((s && s.ui) || {}) },
   };
 
-  // garantir arrays
   merged.products = Array.isArray(merged.products) ? merged.products : [];
   merged.sales = Array.isArray(merged.sales) ? merged.sales : [];
   merged.orders = Array.isArray(merged.orders) ? merged.orders : [];
   merged.cashMoves = Array.isArray(merged.cashMoves) ? merged.cashMoves : [];
 
-  // garantir objetos
-  merged.ui.saleCart =
-    merged.ui.saleCart && typeof merged.ui.saleCart === "object" ? merged.ui.saleCart : {};
+  merged.ui.saleCart = merged.ui.saleCart && typeof merged.ui.saleCart === "object" ? merged.ui.saleCart : {};
   merged.ui.orderDraftItems =
     merged.ui.orderDraftItems && typeof merged.ui.orderDraftItems === "object" ? merged.ui.orderDraftItems : {};
 
-  // defaults seguros
   merged.theme = merged.theme === "light" ? "light" : "dark";
   merged.route = merged.route || "home";
   merged.metaMensal = Number.isFinite(Number(merged.metaMensal)) ? Number(merged.metaMensal) : 3000;
@@ -540,19 +68,16 @@ function normalizeState(s) {
   return merged;
 }
 
-function syncThemeIcon(btnTheme) {
-  const icon = btnTheme?.querySelector(".icon");
-  if (icon) icon.textContent = state.theme === "light" ? "☀️" : "🌙";
-}
-
 function persist() {
   state = normalizeState(state);
   saveState(state);
 }
 
-/* =========================================================
-   NAV + RENDER
-========================================================= */
+function syncThemeIcon(btnTheme) {
+  const icon = btnTheme?.querySelector(".icon");
+  if (icon) icon.textContent = state.theme === "light" ? "☀️" : "🌙";
+}
+
 function navigate(route, silent = false) {
   const r = String(route || "home").trim();
   state.route = r || "home";
@@ -561,7 +86,6 @@ function navigate(route, silent = false) {
   qsa(".nav__item").forEach((b) => b.classList.toggle("is-active", b.dataset.route === state.route));
   render(state.route);
 
-  // manter hash coerente
   try {
     if ((location.hash || "").replace("#", "") !== state.route) {
       history.replaceState(null, "", `#${state.route}`);
@@ -585,51 +109,6 @@ function render(route) {
   };
 
   (routes[route] || routes.home)();
-}
-
-/* =========================================================
-   RENDER HELPERS (FOCUS/CURSOR SAFE)
-========================================================= */
-function captureFocusSnapshot(root) {
-  const ae = document.activeElement;
-  if (!ae) return null;
-  if (!(ae instanceof HTMLInputElement || ae instanceof HTMLTextAreaElement)) return null;
-  if (!root.contains(ae)) return null;
-
-  const id = ae.id || "";
-  if (!id) return null;
-
-  return {
-    id,
-    value: ae.value,
-    selStart: typeof ae.selectionStart === "number" ? ae.selectionStart : null,
-    selEnd: typeof ae.selectionEnd === "number" ? ae.selectionEnd : null,
-  };
-}
-
-function restoreFocusSnapshot(snapshot) {
-  if (!snapshot || !snapshot.id) return;
-  const el = document.getElementById(snapshot.id);
-  if (!(el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement)) return;
-
-  // Não sobrescreve valor se o DOM já veio correto, mas garante o caso de re-render no meio
-  if (typeof snapshot.value === "string" && el.value !== snapshot.value) {
-    el.value = snapshot.value;
-  }
-
-  el.focus({ preventScroll: true });
-
-  if (typeof el.setSelectionRange === "function" && snapshot.selStart !== null && snapshot.selEnd !== null) {
-    try {
-      el.setSelectionRange(snapshot.selStart, snapshot.selEnd);
-    } catch (_) {}
-  }
-}
-
-function renderWithFocus(root, html) {
-  const snap = captureFocusSnapshot(root);
-  root.innerHTML = html;
-  restoreFocusSnapshot(snap);
 }
 
 /* =========================================================
@@ -743,7 +222,32 @@ function renderHome(root) {
     <button class="btn" id="btnSeedDemo" type="button">📊 Inserir dados de teste (demo)</button>
   `;
 
-  renderWithFocus(root, html);
+  root.innerHTML = html;
+
+  qs("#btnQuickSale")?.addEventListener("click", () => navigate("sale"));
+
+  qs("#btnSeedDemo")?.addEventListener("click", () => {
+    seedDemo();
+    toast("Dados demo inseridos ✅", "success");
+    renderHome(root);
+  });
+
+  qs("#btnEditMeta")?.addEventListener("click", () => {
+    const atual = Number(state.metaMensal || 0);
+    const v = prompt("Defina sua meta de LUCRO do mês (em R$). Ex: 3000", String(atual));
+    if (v === null) return;
+
+    const num = parseMoneyInput(v);
+    if (!Number.isFinite(num) || num < 0) {
+      toast("Valor inválido. Use um número como 3000.", "error");
+      return;
+    }
+    state.mesRef = monthKey();
+    state.metaMensal = num;
+    persist();
+    toast("Meta atualizada ✅", "success");
+    renderHome(root);
+  });
 }
 
 function statCard(label, value, icon = "") {
@@ -757,12 +261,15 @@ function statCard(label, value, icon = "") {
 }
 
 /* =========================================================
-   SALE (Balcão)
+   SALE (Balcão)  ✅ Sem re-render no input + sem type=number
 ========================================================= */
+let saleBound = false;
+let saleInputDebounce = null;
+
 function renderSale(root) {
   const products = state.products || [];
   if (products.length === 0) {
-    const html = `
+    root.innerHTML = `
       <div class="h1">💳 Venda (Balcão)</div>
       <section class="card section">
         <div class="empty-state">
@@ -773,9 +280,12 @@ function renderSale(root) {
         </div>
       </section>
     `;
-    renderWithFocus(root, html);
+    qs("#goProducts")?.addEventListener("click", () => navigate("products"));
     return;
   }
+
+  // captura foco/cursor antes de re-render
+  const focusSnap = captureFocusState();
 
   const cart = state.ui.saleCart || {};
   const metodo = state.ui.salePay || "pix";
@@ -799,7 +309,7 @@ function renderSale(root) {
 
     <div style="height:12px"></div>
 
-    <section class="card section">
+    <section class="card section" id="saleSection">
       <div style="font-weight:900;margin-bottom:10px">📋 Resumo da venda</div>
 
       <div class="field">
@@ -852,36 +362,46 @@ function renderSale(root) {
 
         <div class="row">
           <div class="kpi"><b>Desconto</b><span>Aplicado</span></div>
-          <div class="value" id="saleDesconto">-${brl(desconto)}</div>
+          <div class="value" id="saleDiscount">-${brl(desconto)}</div>
         </div>
 
         <div class="row">
           <div class="kpi"><b>Acréscimo</b><span>Adicionado</span></div>
-          <div class="value" id="saleAcrescimo">+${brl(acrescimo)}</div>
+          <div class="value" id="saleExtra">+${brl(acrescimo)}</div>
         </div>
 
         <div class="carttotal">
           <div class="kpi"><b>Total</b><span>A cobrar</span></div>
-          <div class="big" style="color:var(--brand)" id="saleTotal">${brl(totals.totalFinal)}</div>
+          <div class="big" id="saleTotal" style="color:var(--brand)">${brl(totals.totalFinal)}</div>
         </div>
 
         <div class="carttotal">
           <div class="kpi"><b>Lucro</b><span>Desta venda</span></div>
-          <div class="big" style="color:var(--good)" id="saleLucro">${brl(totals.lucro)}</div>
+          <div class="big" id="saleLucro" style="color:var(--good)">${brl(totals.lucro)}</div>
         </div>
 
-        <div id="saleFaltaWrap" style="${metodo === "dinheiro" && falta > 0 ? "" : "display:none"}">
-          <div class="carttotal" style="color:var(--warn)">
-            <div class="kpi"><b>Falta</b><span>Ainda a receber</span></div>
-            <div class="big" id="saleFalta">${brl(falta)}</div>
-          </div>
-        </div>
+        <div id="saleCashBlock">
+          ${
+            metodo === "dinheiro" && falta > 0
+              ? `
+            <div class="carttotal" style="color:var(--warn)" id="saleFaltaRow">
+              <div class="kpi"><b>Falta</b><span>Ainda a receber</span></div>
+              <div class="big" id="saleFalta">${brl(falta)}</div>
+            </div>
+          `
+              : ""
+          }
 
-        <div id="saleTrocoWrap" style="${metodo === "dinheiro" && troco > 0 ? "" : "display:none"}">
-          <div class="carttotal" style="color:var(--good)">
-            <div class="kpi"><b>Troco</b><span>A devolver</span></div>
-            <div class="big" id="saleTroco">${brl(troco)}</div>
-          </div>
+          ${
+            metodo === "dinheiro" && troco > 0
+              ? `
+            <div class="carttotal" style="color:var(--good)" id="saleTrocoRow">
+              <div class="kpi"><b>Troco</b><span>A devolver</span></div>
+              <div class="big" id="saleTroco">${brl(troco)}</div>
+            </div>
+          `
+              : ""
+          }
         </div>
       </div>
 
@@ -892,14 +412,119 @@ function renderSale(root) {
     </section>
   `;
 
-  renderWithFocus(root, html);
+  root.innerHTML = html;
 
-  // pós-render: garantir resumo consistente (sem depender de input listener)
-  updateSaleSummaryDOM(root);
+  // bind único (event delegation) — só uma vez
+  if (!saleBound) {
+    saleBound = true;
+
+    root.addEventListener("click", (e) => {
+      if (state.route !== "sale") return;
+
+      const t = e.target;
+
+      // pagamento
+      const payBtn = t.closest?.("[data-pay]");
+      if (payBtn) {
+        state.ui.salePay = payBtn.dataset.pay || "pix";
+        state.ui.saleReceived = 0;
+        persist();
+        renderSale(root);
+        return;
+      }
+
+      // +/- carrinho
+      const opBtn = t.closest?.("[data-op]");
+      if (opBtn) {
+        const prodId = opBtn.dataset.prod;
+        const op = opBtn.dataset.op;
+        const cart = state.ui.saleCart || {};
+        const qty = cart[prodId] || 0;
+
+        cart[prodId] = op === "plus" ? qty + 1 : Math.max(0, qty - 1);
+        if (cart[prodId] === 0) delete cart[prodId];
+
+        state.ui.saleCart = cart;
+        persist();
+        renderSale(root);
+        return;
+      }
+
+      // finalizar
+      if (t.closest?.("#btnFinalizeSale")) {
+        finalizeSale(root);
+        return;
+      }
+
+      // limpar
+      if (t.closest?.("#btnClearCart")) {
+        state.ui.saleCart = {};
+        state.ui.saleDiscount = 0;
+        state.ui.saleExtra = 0;
+        state.ui.saleReceived = 0;
+        persist();
+        renderSale(root);
+        return;
+      }
+    });
+
+    // inputs (delegation)
+    root.addEventListener("input", (e) => {
+      if (state.route !== "sale") return;
+
+      const el = e.target;
+      if (!(el instanceof HTMLInputElement)) return;
+
+      if (el.id === "inpDiscount") {
+        state.ui.saleDiscount = parseMoneyInput(el.value);
+        persist();
+        debounceSaleRecalc(root);
+      }
+      if (el.id === "inpExtra") {
+        state.ui.saleExtra = parseMoneyInput(el.value);
+        persist();
+        debounceSaleRecalc(root);
+      }
+      if (el.id === "inpRecebido") {
+        state.ui.saleReceived = parseMoneyInput(el.value);
+        persist();
+        debounceSaleRecalc(root);
+      }
+    });
+
+    // ao sair do campo: re-render (pra aplicar máscara/mostrar falta/troco certinho)
+    root.addEventListener("blur", (e) => {
+      if (state.route !== "sale") return;
+      const el = e.target;
+      if (!(el instanceof HTMLInputElement)) return;
+      if (el.id === "inpDiscount" || el.id === "inpExtra" || el.id === "inpRecebido") {
+        renderSale(root);
+      }
+    }, true);
+
+    root.addEventListener("change", (e) => {
+      if (state.route !== "sale") return;
+      const el = e.target;
+      if (!(el instanceof HTMLInputElement)) return;
+      if (el.id === "inpDiscount" || el.id === "inpExtra" || el.id === "inpRecebido") {
+        renderSale(root);
+      }
+    });
+  }
+
+  // restaura foco/cursor depois do re-render
+  restoreFocusState(focusSnap);
 }
 
-function updateSaleSummaryDOM(root) {
-  if (!root) return;
+function debounceSaleRecalc(root) {
+  clearTimeout(saleInputDebounce);
+  saleInputDebounce = setTimeout(() => {
+    // atualiza SOMENTE os números na tela (sem re-render)
+    updateSaleNumbersInDOM(root);
+  }, 350);
+}
+
+function updateSaleNumbersInDOM(root) {
   if (state.route !== "sale") return;
 
   const products = state.products || [];
@@ -921,22 +546,92 @@ function updateSaleSummaryDOM(root) {
   setText("saleSubtotal", brl(totals.subtotal));
   setText("saleCusto", brl(totals.totalCusto));
   setText("saleTaxa", brl(totals.taxa));
-  setText("saleDesconto", `-${brl(desconto)}`);
-  setText("saleAcrescimo", `+${brl(acrescimo)}`);
+  setText("saleTaxaLabel", metodo === "cartao" ? "2.99%" : "Sem taxa");
+  setText("saleDiscount", `-${brl(desconto)}`);
+  setText("saleExtra", `+${brl(acrescimo)}`);
   setText("saleTotal", brl(totals.totalFinal));
   setText("saleLucro", brl(totals.lucro));
 
-  const taxaLabel = root.querySelector("#saleTaxaLabel");
-  if (taxaLabel) taxaLabel.textContent = metodo === "cartao" ? "2.99%" : "Sem taxa";
+  const cashBlock = root.querySelector("#saleCashBlock");
+  if (!cashBlock) return;
 
-  const faltaWrap = root.querySelector("#saleFaltaWrap");
-  const trocoWrap = root.querySelector("#saleTrocoWrap");
+  // reconstruir só o bloco de falta/troco (pequeno, não atrapalha digitação)
+  if (metodo !== "dinheiro") {
+    cashBlock.innerHTML = "";
+    return;
+  }
 
-  if (faltaWrap) faltaWrap.style.display = metodo === "dinheiro" && falta > 0 ? "" : "none";
-  if (trocoWrap) trocoWrap.style.display = metodo === "dinheiro" && troco > 0 ? "" : "none";
+  let html = "";
+  if (falta > 0) {
+    html += `
+      <div class="carttotal" style="color:var(--warn)" id="saleFaltaRow">
+        <div class="kpi"><b>Falta</b><span>Ainda a receber</span></div>
+        <div class="big" id="saleFalta">${brl(falta)}</div>
+      </div>
+    `;
+  }
+  if (troco > 0) {
+    html += `
+      <div class="carttotal" style="color:var(--good)" id="saleTrocoRow">
+        <div class="kpi"><b>Troco</b><span>A devolver</span></div>
+        <div class="big" id="saleTroco">${brl(troco)}</div>
+      </div>
+    `;
+  }
+  cashBlock.innerHTML = html;
+}
 
-  setText("saleFalta", brl(falta));
-  setText("saleTroco", brl(troco));
+function finalizeSale(root) {
+  const products = state.products || [];
+  const cart = state.ui.saleCart || {};
+  const metodo = state.ui.salePay || "pix";
+  const desconto = Number(state.ui.saleDiscount || 0);
+  const acrescimo = Number(state.ui.saleExtra || 0);
+  const recebido = Number(state.ui.saleReceived || 0);
+
+  if (Object.keys(cart).length === 0) {
+    toast("Carrinho vazio!", "error");
+    return;
+  }
+
+  const totals = computeCartTotals(cart, products, metodo, desconto, acrescimo);
+  const falta = metodo === "dinheiro" ? Math.max(0, totals.totalFinal - recebido) : 0;
+  const troco = metodo === "dinheiro" ? Math.max(0, recebido - totals.totalFinal) : 0;
+
+  if (metodo === "dinheiro" && falta > 0) {
+    toast(`Falta receber ${brl(falta)}`, "error");
+    return;
+  }
+
+  const items = cartToItems(cart, products);
+
+  const venda = {
+    id: newId(),
+    date: todayKey(),
+    createdAt: new Date().toISOString(),
+    metodo,
+    items,
+    desconto,
+    acrescimo,
+    recebido,
+    troco,
+    totalVenda: totals.totalFinal,
+    totalCusto: totals.totalCusto,
+    taxaCartao: totals.taxa,
+    lucro: totals.lucro,
+  };
+
+  state.sales.push(venda);
+
+  state.ui.saleCart = {};
+  state.ui.saleDiscount = 0;
+  state.ui.saleExtra = 0;
+  state.ui.saleReceived = 0;
+  state.ui.salePay = "pix";
+
+  persist();
+  toast("Venda registrada ✅", "success");
+  renderSale(root);
 }
 
 function renderProductAddRow(product, cart) {
@@ -992,7 +687,27 @@ function renderOrders(root) {
     }
   `;
 
-  renderWithFocus(root, html);
+  root.innerHTML = html;
+
+  qs("#btnNewOrder")?.addEventListener("click", () => showOrderModal(null, root));
+
+  qsa("[data-order-id]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const oid = btn.dataset.orderId;
+      const action = btn.dataset.action;
+
+      if (action === "edit") showOrderModal(oid, root);
+
+      if (action === "delete") {
+        if (confirm("Deletar encomenda?")) {
+          state.orders = state.orders.filter((o) => o.id !== oid);
+          persist();
+          toast("Encomenda deletada ✅", "success");
+          renderOrders(root);
+        }
+      }
+    });
+  });
 }
 
 function renderOrderRow(order) {
@@ -1016,7 +731,7 @@ function renderOrderRow(order) {
 
 function showOrderModal(orderId, root) {
   const products = state.products || [];
-  const order = orderId ? (state.orders || []).find((o) => o.id === orderId) : null;
+  const order = orderId ? state.orders.find((o) => o.id === orderId) : null;
   const isEdit = !!order;
 
   const itemsById = isEdit ? order.itemsById || {} : state.ui.orderDraftItems || {};
@@ -1030,7 +745,7 @@ function showOrderModal(orderId, root) {
   const total = subtotal + taxaEntregaBase;
 
   const html = `
-    <div class="modal" data-modal="order" data-order-id="${escapeHtml(orderId || "")}">
+    <div class="modal">
       <div class="modal__content">
         <div class="modal__header">
           <div class="modal__title">${isEdit ? "Editar encomenda" : "Nova encomenda"}</div>
@@ -1054,7 +769,7 @@ function showOrderModal(orderId, root) {
 
         <div class="field mt-12">
           <label class="label">Taxa de entrega</label>
-          <input type="number" class="input" id="inpTaxa" placeholder="0,00" value="${formatMoneyInput(taxaEntregaBase)}" />
+          <input type="text" inputmode="decimal" class="input" id="inpTaxa" placeholder="0,00" value="${formatMoneyInput(taxaEntregaBase)}" />
         </div>
 
         <div style="font-weight:900;margin-top:16px;margin-bottom:10px">📦 Produtos</div>
@@ -1078,7 +793,7 @@ function showOrderModal(orderId, root) {
 
         <div class="field mt-12">
           <label class="label">Sinal</label>
-          <input type="number" class="input" id="inpSinal" placeholder="0,00" value="${formatMoneyInput(sinalBase)}" />
+          <input type="text" inputmode="decimal" class="input" id="inpSinal" placeholder="0,00" value="${formatMoneyInput(sinalBase)}" />
         </div>
 
         <div class="carttotal">
@@ -1121,10 +836,97 @@ function showOrderModal(orderId, root) {
   `;
 
   const container = qs("#modalContainer");
-  // preserva foco dentro do modal ao re-render
-  const snap = captureFocusSnapshot(container);
   container.innerHTML = html;
-  restoreFocusSnapshot(snap);
+
+  const modal = qs(".modal");
+  qs("#closeModal")?.addEventListener("click", () => modal.remove());
+  modal?.addEventListener("click", (e) => {
+    if (e.target === modal) modal.remove();
+  });
+
+  qsa("[data-op]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const prodId = btn.dataset.prod;
+      const op = btn.dataset.op;
+      const q = itemsById[prodId] || 0;
+
+      itemsById[prodId] = op === "plus" ? q + 1 : Math.max(0, q - 1);
+      if (itemsById[prodId] === 0) delete itemsById[prodId];
+
+      state.ui.orderDraftItems = itemsById;
+      persist();
+      showOrderModal(orderId, root);
+    });
+  });
+
+  qs("#btnSaveOrder")?.addEventListener("click", () => {
+    const cliente = (qs("#inpCliente")?.value || "").trim();
+    const whats = (qs("#inpWhats")?.value || "").trim();
+    const dataRetirada = qs("#inpData")?.value || "";
+    const taxaEntrega = parseMoneyInput(qs("#inpTaxa")?.value || "0");
+    const sinal = parseMoneyInput(qs("#inpSinal")?.value || "0");
+    const status = qs("#selStatus")?.value || "aberta";
+
+    if (!cliente) return toast("Preencha o nome do cliente", "error");
+    if (Object.keys(itemsById).length === 0) return toast("Adicione pelo menos um produto", "error");
+
+    const items = cartToItems(itemsById, products);
+    const subtotal = items.reduce((a, i) => a + i.qty * i.unitPrice, 0);
+    const totalCusto = items.reduce((a, i) => a + i.qty * i.unitCost, 0);
+    const total = subtotal + taxaEntrega;
+
+    if (isEdit) {
+      const idx = state.orders.findIndex((o) => o.id === orderId);
+      if (idx >= 0) {
+        state.orders[idx] = {
+          ...order,
+          cliente,
+          whats,
+          dataRetirada,
+          taxaEntrega,
+          sinal,
+          status,
+          itemsById,
+          items,
+          total,
+          totalCusto,
+          lucroEstimado: calcProfit(total, totalCusto, 0),
+        };
+      }
+    } else {
+      state.orders.push({
+        id: newId(),
+        createdAt: new Date().toISOString(),
+        status: "aberta",
+        cliente,
+        whats,
+        dataRetirada,
+        taxaEntrega,
+        sinal,
+        itemsById,
+        items,
+        total,
+        totalCusto,
+        lucroEstimado: calcProfit(total, totalCusto, 0),
+      });
+    }
+
+    state.ui.orderDraftItems = {};
+    persist();
+    modal.remove();
+    toast(`Encomenda ${isEdit ? "atualizada" : "criada"} ✅`, "success");
+    renderOrders(root);
+  });
+
+  qs("#btnDeleteOrder")?.addEventListener("click", () => {
+    if (confirm("Tem certeza que quer deletar esta encomenda?")) {
+      state.orders = state.orders.filter((o) => o.id !== orderId);
+      persist();
+      modal.remove();
+      toast("Encomenda deletada ✅", "success");
+      renderOrders(root);
+    }
+  });
 }
 
 function renderOrderProductRow(product, itemsById) {
@@ -1180,7 +982,27 @@ function renderProducts(root) {
     }
   `;
 
-  renderWithFocus(root, html);
+  root.innerHTML = html;
+
+  qs("#btnNewProduct")?.addEventListener("click", () => showProductModal(null, root));
+
+  qsa("[data-prod-id]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const pid = btn.dataset.prodId;
+      const action = btn.dataset.action;
+
+      if (action === "edit") showProductModal(pid, root);
+
+      if (action === "delete") {
+        if (confirm("Deletar produto?")) {
+          state.products = state.products.filter((p) => p.id !== pid);
+          persist();
+          toast("Produto deletado ✅", "success");
+          renderProducts(root);
+        }
+      }
+    });
+  });
 }
 
 function renderProductRow(product) {
@@ -1206,7 +1028,7 @@ function renderProductRow(product) {
 }
 
 function showProductModal(productId, root) {
-  const product = productId ? (state.products || []).find((p) => p.id === productId) : null;
+  const product = productId ? state.products.find((p) => p.id === productId) : null;
   const isEdit = !!product;
 
   const html = `
@@ -1225,12 +1047,12 @@ function showProductModal(productId, root) {
         <div class="fieldgrid mt-12">
           <div class="field">
             <label class="label">Preço de venda</label>
-            <input type="number" class="input" id="inpPreco" placeholder="0,00" value="${formatMoneyInput(product?.preco || 0)}" />
+            <input type="text" inputmode="decimal" class="input" id="inpPreco" placeholder="0,00" value="${formatMoneyInput(product?.preco || 0)}" />
           </div>
 
           <div class="field">
             <label class="label">Custo unitário</label>
-            <input type="number" class="input" id="inpCusto" placeholder="0,00" value="${formatMoneyInput(product?.custo || 0)}" />
+            <input type="text" inputmode="decimal" class="input" id="inpCusto" placeholder="0,00" value="${formatMoneyInput(product?.custo || 0)}" />
           </div>
         </div>
 
@@ -1290,7 +1112,7 @@ function showProductModal(productId, root) {
     if (!Number.isFinite(custo) || custo < 0) return toast("Custo inválido", "error");
 
     if (isEdit) {
-      const idx = (state.products || []).findIndex((p) => p.id === productId);
+      const idx = state.products.findIndex((p) => p.id === productId);
       if (idx >= 0) state.products[idx] = { ...product, nome, preco, custo };
     } else {
       state.products.push({ id: newId(), nome, preco, custo });
@@ -1304,7 +1126,7 @@ function showProductModal(productId, root) {
 
   qs("#btnDeleteProduct")?.addEventListener("click", () => {
     if (confirm("Deletar produto?")) {
-      state.products = (state.products || []).filter((p) => p.id !== productId);
+      state.products = state.products.filter((p) => p.id !== productId);
       persist();
       modal.remove();
       toast("Produto deletado ✅", "success");
@@ -1415,7 +1237,7 @@ function renderReports(root) {
     </section>
   `;
 
-  renderWithFocus(root, html);
+  root.innerHTML = html;
 }
 
 /* =========================================================
@@ -1446,7 +1268,58 @@ function renderMore(root) {
     </section>
   `;
 
-  renderWithFocus(root, html);
+  root.innerHTML = html;
+
+  qs("#btnExportData")?.addEventListener("click", () => {
+    const dataStr = JSON.stringify(state, null, 2);
+    const blob = new Blob([dataStr], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `doce-lucro-backup-${new Date().toISOString().slice(0, 10)}.json`;
+    a.click();
+
+    URL.revokeObjectURL(url);
+    toast("Dados exportados ✅", "success");
+  });
+
+  qs("#btnImportData")?.addEventListener("click", () => {
+    const input = document.createElement("input");
+    input.type = "file";
+    input.accept = ".json";
+
+    input.onchange = (e) => {
+      const file = e.target.files?.[0];
+      if (!file) return;
+
+      const reader = new FileReader();
+      reader.onload = (event) => {
+        try {
+          const imported = JSON.parse(String(event.target.result || "{}"));
+          state = normalizeState({ ...state, ...imported });
+          persist();
+          toast("Dados importados ✅", "success");
+          renderMore(root);
+        } catch (err) {
+          toast("Erro ao importar arquivo", "error");
+        }
+      };
+
+      reader.readAsText(file);
+    };
+
+    input.click();
+  });
+
+  qs("#btnClearData")?.addEventListener("click", () => {
+    if (confirm("⚠️ Tem certeza? Isso vai DELETAR TODOS os dados!")) {
+      state = normalizeState(getDefaultState());
+      persist();
+      toast("Dados limpos ✅", "success");
+      renderMore(root);
+    }
+  });
 }
 
 /* =========================================================
@@ -1546,36 +1419,27 @@ function escapeHtml(text) {
   return String(text ?? "").replace(/[&<>"']/g, (m) => map[m]);
 }
 
-// robusto: aceita "12,50", "12.50", "1.234,56", "1,234.56"
+// ✅ robusto: "12,50", "12.50", "1.234,56", "1,234.56"
 function parseMoneyInput(value) {
   if (value === null || value === undefined) return 0;
-
   let str = String(value).trim();
   if (!str) return 0;
 
-  // mantém dígitos, separadores e sinal
   str = str.replace(/[^\d.,-]/g, "");
 
   const hasComma = str.includes(",");
   const hasDot = str.includes(".");
 
   if (hasComma && hasDot) {
-    // escolhe o último separador como decimal
     const lastComma = str.lastIndexOf(",");
     const lastDot = str.lastIndexOf(".");
     if (lastComma > lastDot) {
-      // vírgula decimal, ponto milhar
       str = str.replace(/\./g, "").replace(",", ".");
     } else {
-      // ponto decimal, vírgula milhar
       str = str.replace(/,/g, "");
     }
   } else if (hasComma) {
-    // vírgula decimal
     str = str.replace(/\./g, "").replace(",", ".");
-  } else {
-    // só ponto ou só dígitos: ok
-    // se vier "1.234" e usuário quis milhar, vira 1.234 (não tem como adivinhar 100%)
   }
 
   const num = parseFloat(str);
@@ -1596,7 +1460,6 @@ function computeCartTotals(cart, products, metodo, desconto, acrescimo) {
   const taxa = calcCardFee(subtotal, metodo);
   const totalFinal = subtotal + acrescimo - desconto + taxa;
 
-  // lucro = totalFinal - custo - taxa (taxa já está dentro do totalFinal)
   const lucro = calcProfit(totalFinal, totalCusto, taxa);
 
   return { subtotal, totalCusto, taxa, totalFinal, lucro };
@@ -1618,12 +1481,26 @@ function cartToItems(cart, products) {
     .filter(Boolean);
 }
 
-function debounce(fn, wait = 350) {
-  let t = null;
-  return (...args) => {
-    if (t) clearTimeout(t);
-    t = setTimeout(() => fn(...args), wait);
+function captureFocusState() {
+  const el = document.activeElement;
+  if (!el || !(el instanceof HTMLInputElement)) return null;
+  return {
+    id: el.id || null,
+    start: el.selectionStart,
+    end: el.selectionEnd,
   };
+}
+
+function restoreFocusState(snap) {
+  if (!snap || !snap.id) return;
+  const el = document.getElementById(snap.id);
+  if (!el || !(el instanceof HTMLInputElement)) return;
+  try {
+    el.focus();
+    if (typeof snap.start === "number" && typeof snap.end === "number") {
+      el.setSelectionRange(snap.start, snap.end);
+    }
+  } catch (_) {}
 }
 
 function todayKey() {
