@@ -2,11 +2,12 @@
    SERVICE WORKER — PWA OFFLINE SUPPORT (Doce Lucro)
    - App Shell precache
    - Navigation fallback to index.html
+   - Network-first for critical files (updates)
    - Cache-first for static assets
    - Safer updates via version bump
 ========================================================= */
 
-const VERSION = "v1.0.0"; // 👈 mude quando publicar update
+const VERSION = "v1.0.1"; // ✅ BUMP SEMPRE que publicar update
 const PRECACHE = `doce-lucro-precache-${VERSION}`;
 const RUNTIME = `doce-lucro-runtime-${VERSION}`;
 
@@ -21,7 +22,7 @@ function u(path) {
  * App Shell (o essencial para o app abrir offline)
  */
 const PRECACHE_URLS = [
-  u("./"),                 // scope root
+  u("./"),
   u("./index.html"),
   u("./styles/styles.css"),
   u("./src/app.js"),
@@ -29,7 +30,7 @@ const PRECACHE_URLS = [
   u("./src/ui.js"),
   u("./src/db.js"),
   u("./manifest.webmanifest"),
-  // Se você tiver ícones essenciais, coloque aqui também:
+  // ✅ se o arquivo existir mesmo, pode descomentar:
   // u("./assets/icons/icon-192.png"),
 ];
 
@@ -38,13 +39,10 @@ self.addEventListener("install", (event) => {
   event.waitUntil((async () => {
     const cache = await caches.open(PRECACHE);
 
-    // Cacheia um por um (evita falhar tudo por 1 arquivo)
     for (const url of PRECACHE_URLS) {
       try {
         await cache.add(url);
       } catch (e) {
-        // Não mata o install; mas é bom saber no devtools
-        // (em produção você pode remover o console)
         console.warn("[SW] Falha ao precache:", url, e);
       }
     }
@@ -59,9 +57,7 @@ self.addEventListener("activate", (event) => {
     const keys = await caches.keys();
     await Promise.all(
       keys.map((key) => {
-        if (key !== PRECACHE && key !== RUNTIME) {
-          return caches.delete(key);
-        }
+        if (key !== PRECACHE && key !== RUNTIME) return caches.delete(key);
       })
     );
 
@@ -91,35 +87,45 @@ function isStaticAsset(url) {
   );
 }
 
+/**
+ * ✅ Arquivos críticos: sempre tentar pegar o mais novo (network-first)
+ */
+function isCritical(url) {
+  const p = url.pathname;
+  return (
+    p.endsWith("/index.html") ||
+    p.endsWith("/styles/styles.css") ||
+    p.endsWith("/src/app.js") ||
+    p.endsWith("/src/ui.js") ||
+    p.endsWith("/src/state.js") ||
+    p.endsWith("/src/db.js") ||
+    p.endsWith("/manifest.webmanifest") ||
+    p.endsWith("/sw.js")
+  );
+}
+
 /* Fetch */
 self.addEventListener("fetch", (event) => {
   const { request } = event;
 
-  // Só GET
   if (request.method !== "GET") return;
 
   const url = new URL(request.url);
 
-  // Só tratar requests dentro do escopo do SW
-  // (evita mexer em requests externos)
   const scopeUrl = new URL(self.registration.scope);
   const inScope = url.origin === scopeUrl.origin && url.pathname.startsWith(scopeUrl.pathname);
 
-  if (!inScope) {
-    // Para externos: deixa ir direto (ou você pode cachear fonts depois)
-    return;
-  }
+  if (!inScope) return;
 
-  // Navegação: network-first com fallback do index.html
+  // ✅ Navegação: network-first + fallback index.html
   if (isNavigationRequest(request)) {
     event.respondWith((async () => {
       try {
-        const fresh = await fetch(request);
+        const fresh = await fetch(request, { cache: "no-store" });
         const cache = await caches.open(RUNTIME);
         cache.put(request, fresh.clone());
         return fresh;
       } catch (_) {
-        // offline: tenta cache da navegação, senão cai pro index.html (app shell)
         const cachedNav = await caches.match(request);
         if (cachedNav) return cachedNav;
 
@@ -132,7 +138,27 @@ self.addEventListener("fetch", (event) => {
     return;
   }
 
-  // Assets estáticos: cache-first (rápido e bom offline)
+  // ✅ Críticos: network-first (pra não travar em versão velha)
+  if (isCritical(url)) {
+    event.respondWith((async () => {
+      try {
+        const fresh = await fetch(request, { cache: "no-store" });
+        const cache = await caches.open(RUNTIME);
+        cache.put(request, fresh.clone());
+        return fresh;
+      } catch (_) {
+        const cached = await caches.match(request);
+        if (cached) return cached;
+        return new Response("Offline - arquivo crítico não disponível", {
+          status: 503,
+          headers: { "Content-Type": "text/plain" }
+        });
+      }
+    })());
+    return;
+  }
+
+  // Assets estáticos: cache-first
   if (isStaticAsset(url)) {
     event.respondWith((async () => {
       const cached = await caches.match(request);
