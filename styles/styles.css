@@ -58,9 +58,16 @@
   --nav-gap: 10px;
   --nav-h: 78px;
 
-  /* NEW: sizing helpers */
+  /* sizing helpers */
   --tap: 44px;
-  --tap2: 46px; /* levemente maior */
+  --tap2: 46px;
+
+  /* new: subtle highlight */
+  --hl: rgba(255, 255, 255, 0.06);
+  --hl2: rgba(255, 255, 255, 0.10);
+
+  /* new: modal overlay */
+  --overlay: rgba(0, 0, 0, 0.55);
 }
 
 :root[data-theme="light"] {
@@ -73,15 +80,20 @@
   --stroke: rgba(0, 0, 0, 0.10);
   --stroke2: rgba(0, 0, 0, 0.16);
 
-  --text: rgba(0, 0, 0, 0.88);
-  --muted: rgba(0, 0, 0, 0.58);
-  --muted2: rgba(0, 0, 0, 0.44);
+  --text: rgba(0, 0, 0, 0.90);
+  --muted: rgba(0, 0, 0, 0.62);   /* +contraste */
+  --muted2: rgba(0, 0, 0, 0.48);  /* +contraste */
 
   --shadow: 0 16px 50px rgba(0, 0, 0, 0.10);
   --shadowSoft: 0 10px 30px rgba(0, 0, 0, 0.08);
   --shadowMed: 0 8px 22px rgba(0, 0, 0, 0.10);
 
   --ring: 0 0 0 4px rgba(124, 92, 255, 0.14);
+
+  --hl: rgba(0, 0, 0, 0.035);
+  --hl2: rgba(0, 0, 0, 0.06);
+
+  --overlay: rgba(0, 0, 0, 0.45);
 }
 
 /* ---------------------------
@@ -103,6 +115,9 @@ body {
   overflow-x: hidden;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+
+  /* mobile tap feel */
+  -webkit-tap-highlight-color: rgba(255, 79, 163, 0.18);
 }
 
 img, svg, video, canvas { max-width: 100%; height: auto; display: block; }
@@ -118,6 +133,17 @@ button { font-family: inherit; }
   box-shadow: var(--ring);
   border-radius: 14px;
 }
+
+/* scrollbar (discreto) */
+*::-webkit-scrollbar { width: 10px; height: 10px; }
+*::-webkit-scrollbar-thumb {
+  background: rgba(255,255,255,0.14);
+  border-radius: 999px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+:root[data-theme="light"] *::-webkit-scrollbar-thumb { background: rgba(0,0,0,0.16); }
+*::-webkit-scrollbar-track { background: transparent; }
 
 /* ---------------------------
    APP LAYOUT
@@ -234,12 +260,14 @@ button { font-family: inherit; }
   font-size: 20px;
 }
 
-.iconbtn:hover {
-  background: rgba(255, 255, 255, 0.10);
-  border-color: var(--stroke2);
-  transform: translateY(-2px);
+/* hover só quando faz sentido (desktop) */
+@media (hover:hover) and (pointer:fine) {
+  .iconbtn:hover {
+    background: rgba(255, 255, 255, 0.10);
+    border-color: var(--stroke2);
+    transform: translateY(-2px);
+  }
 }
-
 .iconbtn:active { transform: scale(0.98); }
 
 /* ---------------------------
@@ -281,9 +309,11 @@ button { font-family: inherit; }
   transition: var(--transition);
 }
 
-.card:hover {
-  border-color: var(--stroke2);
-  box-shadow: var(--shadowMed);
+@media (hover:hover) and (pointer:fine) {
+  .card:hover {
+    border-color: var(--stroke2);
+    box-shadow: var(--shadowMed);
+  }
 }
 
 .section { padding: 16px; }
@@ -303,7 +333,9 @@ button { font-family: inherit; }
 }
 
 .stat { padding: 16px; transition: var(--transition); }
-.stat:hover { transform: translateY(-4px); }
+@media (hover:hover) and (pointer:fine) {
+  .stat:hover { transform: translateY(-4px); }
+}
 
 .stat__label {
   font-size: 12px;
@@ -339,12 +371,13 @@ button { font-family: inherit; }
   min-height: var(--tap);
 }
 
-.btn:hover {
-  background: rgba(255, 255, 255, 0.13);
-  border-color: var(--stroke2);
-  transform: translateY(-2px);
+@media (hover:hover) and (pointer:fine) {
+  .btn:hover {
+    background: rgba(255, 255, 255, 0.13);
+    border-color: var(--stroke2);
+    transform: translateY(-2px);
+  }
 }
-
 .btn:active { transform: scale(0.99); }
 
 .btn--brand {
@@ -355,8 +388,9 @@ button { font-family: inherit; }
     0 16px 45px rgba(255, 79, 163, 0.18);
   color: #fff;
 }
-
-.btn--brand:hover { opacity: 0.98; transform: translateY(-2px); }
+@media (hover:hover) and (pointer:fine) {
+  .btn--brand:hover { opacity: 0.98; transform: translateY(-2px); }
+}
 
 .btn--small {
   padding: 10px 12px;
@@ -366,7 +400,9 @@ button { font-family: inherit; }
 }
 
 .btn--danger { border-color: rgba(255, 93, 93, 0.35); color: var(--bad); }
-.btn--danger:hover { background: rgba(255, 93, 93, 0.12); }
+@media (hover:hover) and (pointer:fine) {
+  .btn--danger:hover { background: rgba(255, 93, 93, 0.12); }
+}
 
 /* ---------------------------
    ROWS / KPI
@@ -384,7 +420,9 @@ button { font-family: inherit; }
 
 :root[data-theme="light"] .row { border-top: 1px solid rgba(0, 0, 0, 0.06); }
 .row:first-child { border-top: 0; }
-.row:hover { background: rgba(255, 255, 255, 0.03); }
+@media (hover:hover) and (pointer:fine) {
+  .row:hover { background: var(--hl); }
+}
 
 .kpi { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
 .kpi b { font-size: 14px; font-weight: 900; }
@@ -419,7 +457,10 @@ button { font-family: inherit; }
   overflow: hidden;
 }
 
-.progress__bar {
+/* ✅ Compat: aceita 3 convenções sem exigir mudar HTML/JS */
+.progress__bar,
+.progress-bar,
+.progress_bar {
   height: 100%;
   width: 0%;
   border-radius: 999px;
@@ -429,7 +470,6 @@ button { font-family: inherit; }
 
 /* ---------------------------
    PILLS (Pagamento: Pix/Dinheiro/Cartão)
-   -> Aqui resolve o "apagado" e deixa um pouco maior
 --------------------------- */
 .pillrow {
   display: flex;
@@ -439,49 +479,43 @@ button { font-family: inherit; }
 }
 
 .pill {
-  font-size: 13px;              /* +1 pra legibilidade */
+  font-size: 13px;
   font-weight: 950;
-  padding: 10px 14px;           /* maior, sem exagero */
+  padding: 10px 14px;
   border-radius: 999px;
   border: 1px solid rgba(255,255,255,0.16);
   background: rgba(255, 255, 255, 0.06);
   box-shadow: var(--shadowSoft);
   transition: var(--transition);
   cursor: pointer;
-  min-height: var(--tap);       /* área de toque */
-  color: rgba(255,255,255,0.88);
+  min-height: var(--tap);
+  color: rgba(255,255,255,0.90);
   letter-spacing: -0.1px;
 }
 
 :root[data-theme="light"] .pill{
   border-color: rgba(0,0,0,0.12);
   background: rgba(0,0,0,0.04);
-  color: rgba(0,0,0,0.80);
+  color: rgba(0,0,0,0.82);
 }
 
-.pill:hover {
-  background: rgba(255, 255, 255, 0.10);
-  border-color: rgba(255,255,255,0.24);
-  transform: translateY(-1px);
+@media (hover:hover) and (pointer:fine) {
+  .pill:hover {
+    background: rgba(255, 255, 255, 0.10);
+    border-color: rgba(255,255,255,0.24);
+    transform: translateY(-1px);
+  }
+
+  :root[data-theme="light"] .pill:hover {
+    background: rgba(0,0,0,0.06);
+    border-color: rgba(0,0,0,0.18);
+  }
 }
 
-:root[data-theme="light"] .pill:hover {
-  background: rgba(0,0,0,0.06);
-  border-color: rgba(0,0,0,0.18);
-}
-
-/* ✅ Estado “selecionado” (se seu JS aplica .is-active OU .active) */
+/* ✅ Estado “selecionado” */
 .pill.is-active,
-.pill.active {
-  background: linear-gradient(135deg, rgba(255,79,163,0.95), rgba(124,92,255,0.95));
-  border-color: transparent;
-  color: #fff;
-  box-shadow:
-    0 14px 40px rgba(255, 79, 163, 0.20),
-    0 14px 40px rgba(124, 92, 255, 0.18);
-}
-
-/* ✅ Também funciona caso você use aria-pressed */
+.pill.active,
+.pill[data-active="true"],
 .pill[aria-pressed="true"]{
   background: linear-gradient(135deg, rgba(255,79,163,0.95), rgba(124,92,255,0.95));
   border-color: transparent;
@@ -490,6 +524,9 @@ button { font-family: inherit; }
     0 14px 40px rgba(255, 79, 163, 0.20),
     0 14px 40px rgba(124, 92, 255, 0.18);
 }
+
+/* "pressed" no mobile */
+.pill:active { transform: scale(0.99); }
 
 .value { color: var(--text); font-weight: 950; font-size: 13px; }
 
@@ -563,15 +600,17 @@ button { font-family: inherit; }
   cursor: pointer;
   transition: var(--transition);
   font-size: 11px;
-  min-height: 54px; /* +2 pra ficar mais “tocável” */
+  min-height: 54px;
 }
 
-.nav__item:hover { background: rgba(255, 255, 255, 0.06); }
+@media (hover:hover) and (pointer:fine) {
+  .nav__item:hover { background: var(--hl); }
+}
 .nav__item:active { transform: scale(0.99); }
 
 .nav__item.is-active {
   color: var(--text);
-  background: rgba(255, 255, 255, 0.10);
+  background: var(--hl2);
   border-color: var(--stroke2);
 }
 
@@ -623,7 +662,7 @@ button { font-family: inherit; }
 
 :root[data-theme="light"] .dl-toast {
   background: rgba(255, 255, 255, 0.94);
-  color: rgba(0, 0, 0, 0.85);
+  color: rgba(0, 0, 0, 0.86);
   border: 1px solid rgba(0, 0, 0, 0.10);
 }
 
@@ -661,12 +700,26 @@ button { font-family: inherit; }
 }
 
 .input::placeholder { color: rgba(255, 255, 255, 0.42); }
-:root[data-theme="light"] .input::placeholder { color: rgba(0, 0, 0, 0.35); }
+:root[data-theme="light"] .input::placeholder { color: rgba(0, 0, 0, 0.38); }
 
 .input:focus, .select:focus {
   border-color: rgba(255, 79, 163, 0.45);
   box-shadow: var(--ring);
   background: rgba(255, 255, 255, 0.09);
+}
+
+/* melhora autofill (Chrome) */
+input:-webkit-autofill,
+input:-webkit-autofill:hover,
+input:-webkit-autofill:focus {
+  -webkit-text-fill-color: var(--text);
+  transition: background-color 9999s ease-in-out 0s;
+  box-shadow: 0 0 0 999px rgba(255,255,255,0.04) inset;
+}
+:root[data-theme="light"] input:-webkit-autofill,
+:root[data-theme="light"] input:-webkit-autofill:hover,
+:root[data-theme="light"] input:-webkit-autofill:focus {
+  box-shadow: 0 0 0 999px rgba(0,0,0,0.03) inset;
 }
 
 .select {
@@ -698,7 +751,9 @@ button { font-family: inherit; }
   transition: var(--transition);
 }
 
-.proditem:hover { background: rgba(255, 255, 255, 0.08); border-color: var(--stroke2); }
+@media (hover:hover) and (pointer:fine) {
+  .proditem:hover { background: rgba(255, 255, 255, 0.08); border-color: var(--stroke2); }
+}
 
 .prodmeta {
   min-width: 0;
@@ -740,8 +795,8 @@ button { font-family: inherit; }
 :root[data-theme="light"] .qty { background: rgba(0, 0, 0, 0.04); }
 
 .qbtn {
-  width: 40px;   /* +2 */
-  height: 40px;  /* +2 */
+  width: 40px;
+  height: 40px;
   border-radius: 999px;
   border: 1px solid var(--stroke);
   background: rgba(255, 255, 255, 0.07);
@@ -752,7 +807,9 @@ button { font-family: inherit; }
   font-size: 16px;
 }
 
-.qbtn:hover { background: rgba(255, 255, 255, 0.12); }
+@media (hover:hover) and (pointer:fine) {
+  .qbtn:hover { background: rgba(255, 255, 255, 0.12); }
+}
 .qbtn:active { transform: scale(0.98); }
 
 .qnum {
@@ -809,15 +866,17 @@ button { font-family: inherit; }
 .modal {
   position: fixed;
   top: 0; left: 0; right: 0; bottom: 0;
-  background: rgba(0, 0, 0, 0.5);
+  background: var(--overlay);
   display: flex;
   align-items: flex-end;
   z-index: 100;
-  animation: slideUp 0.3s ease;
+  animation: slideUp 0.26s ease;
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
 }
 
 @keyframes slideUp {
-  from { opacity: 0; transform: translateY(100px); }
+  from { opacity: 0; transform: translateY(90px); }
   to { opacity: 1; transform: translateY(0); }
 }
 
@@ -828,6 +887,10 @@ button { font-family: inherit; }
   padding: 20px 16px calc(20px + var(--safeBottom));
   max-height: 90vh;
   overflow-y: auto;
+
+  border: 1px solid var(--stroke);
+  border-bottom: 0;
+  box-shadow: var(--shadow);
 }
 
 .modal__header {
@@ -854,7 +917,9 @@ button { font-family: inherit; }
   transition: var(--transition);
 }
 
-.modal__close:hover { background: rgba(255, 255, 255, 0.12); }
+@media (hover:hover) and (pointer:fine) {
+  .modal__close:hover { background: rgba(255, 255, 255, 0.12); }
+}
 
 /* Empty State */
 .empty-state { text-align: center; padding: 40px 16px; }
@@ -891,3 +956,137 @@ button { font-family: inherit; }
 .items-center { align-items: center; }
 .justify-between { justify-content: space-between; }
 .justify-center { justify-content: center; }
+/* =========================================================
+   NAV — SaaS Dock (Premium)  ✅ (só visual)
+   Cole no FINAL do styles.css
+========================================================= */
+
+/* base do dock mais “premium” */
+.nav {
+  padding: 10px 10px;
+  border-radius: 26px;
+
+  background: rgba(0, 0, 0, 0.58);
+  border: 1px solid rgba(255, 255, 255, 0.10);
+
+  backdrop-filter: blur(22px);
+  -webkit-backdrop-filter: blur(22px);
+
+  box-shadow:
+    0 18px 55px rgba(0, 0, 0, 0.55),
+    0 0 0 1px rgba(255, 255, 255, 0.04) inset;
+}
+
+/* light dock */
+:root[data-theme="light"] .nav {
+  background: rgba(255, 255, 255, 0.92);
+  border: 1px solid rgba(0, 0, 0, 0.08);
+  box-shadow:
+    0 14px 44px rgba(0, 0, 0, 0.12),
+    0 0 0 1px rgba(0, 0, 0, 0.03) inset;
+}
+
+/* itens: menos “quadrado”, mais “dock” */
+.nav__item {
+  position: relative;
+  border-radius: 18px;
+  min-height: 56px;
+  gap: 6px;
+
+  /* evita “pulo” no toque */
+  transform: translateZ(0);
+  will-change: transform;
+}
+
+/* hover só no desktop */
+@media (hover:hover) and (pointer:fine) {
+  .nav__item:hover {
+    background: rgba(255, 255, 255, 0.06);
+  }
+  :root[data-theme="light"] .nav__item:hover {
+    background: rgba(0, 0, 0, 0.04);
+  }
+}
+
+/* toque no mobile */
+.nav__item:active {
+  transform: scale(0.985);
+}
+
+/* ícone com consistência */
+.nav__icon {
+  font-size: 18px;
+  line-height: 1;
+  transform: translateY(0);
+  transition: var(--transition);
+}
+
+/* label um tiquinho mais “forte” */
+.nav__label {
+  font-size: 11px;
+  font-weight: 950;
+  letter-spacing: -0.1px;
+  transition: var(--transition);
+}
+
+/* ===== estado ativo (SaaS) ===== */
+.nav__item.is-active {
+  color: var(--text);
+  border-color: transparent;
+
+  /* pílula suave + brilho */
+  background: linear-gradient(
+    180deg,
+    rgba(255, 255, 255, 0.14),
+    rgba(255, 255, 255, 0.08)
+  );
+
+  box-shadow:
+    0 10px 28px rgba(0, 0, 0, 0.35),
+    0 0 0 1px rgba(255, 255, 255, 0.08) inset;
+}
+
+:root[data-theme="light"] .nav__item.is-active {
+  background: linear-gradient(
+    180deg,
+    rgba(0, 0, 0, 0.06),
+    rgba(0, 0, 0, 0.03)
+  );
+  box-shadow:
+    0 10px 22px rgba(0, 0, 0, 0.10),
+    0 0 0 1px rgba(0, 0, 0, 0.05) inset;
+}
+
+/* ícone ativo com “lift” sutil */
+.nav__item.is-active .nav__icon {
+  transform: translateY(-1px) scale(1.03);
+}
+
+/* indicador (bolinha/barra) com brand gradient */
+.nav__item.is-active::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  bottom: 6px;
+  transform: translateX(-50%);
+  width: 22px;
+  height: 4px;
+  border-radius: 999px;
+  background: linear-gradient(90deg, rgba(255, 79, 163, 0.98), rgba(124, 92, 255, 0.98));
+  box-shadow:
+    0 10px 26px rgba(255, 79, 163, 0.18),
+    0 10px 26px rgba(124, 92, 255, 0.16);
+  opacity: 0.95;
+}
+
+/* em telas bem pequenas, reduz um pouco o indicador */
+@media (max-width: 360px) {
+  .nav__item.is-active::after {
+    width: 18px;
+  }
+}
+
+/* acessibilidade: foco */
+.nav__item:focus-visible {
+  box-shadow: var(--ring);
+}

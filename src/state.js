@@ -1,7 +1,13 @@
 const KEY = "doce_lucro_state_v1";
 
 export function newId() {
-  return crypto?.randomUUID?.() || `id_${Date.now()}_${Math.random().toString(16).slice(2)}`;
+  try {
+    // evita ReferenceError se crypto não existir
+    if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+      return crypto.randomUUID();
+    }
+  } catch (_) {}
+  return `id_${Date.now()}_${Math.random().toString(16).slice(2)}`;
 }
 
 export function getDefaultState() {
@@ -42,7 +48,12 @@ export function getDefaultState() {
 export function loadState() {
   try {
     const raw = localStorage.getItem(KEY);
-    return raw ? JSON.parse(raw) : null;
+    if (!raw) return null;
+
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== "object") return null;
+
+    return parsed;
   } catch {
     return null;
   }
@@ -50,7 +61,8 @@ export function loadState() {
 
 export function saveState(state) {
   try {
-    localStorage.setItem(KEY, JSON.stringify(state));
+    const raw = JSON.stringify(state);
+    localStorage.setItem(KEY, raw);
   } catch {}
 }
 

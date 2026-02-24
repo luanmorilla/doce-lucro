@@ -24,7 +24,9 @@ async function mount() {
   });
 
   window.addEventListener("hashchange", () => {
-    const r = (location.hash || "").replace("#", "").trim();
+    const r = String(location.hash || "")
+      .replace("#", "")
+      .trim();
     if (r) navigate(r, true);
   });
 
@@ -37,11 +39,18 @@ async function mount() {
 
   // Listener: mudanças de auth (login/logout)
   supabase.auth.onAuthStateChange(async (_event, newSession) => {
-    session = newSession;
-    render(state.route || "home");
+    try {
+      session = newSession;
+      render(state.route || "home");
+    } catch {
+      // não derruba a UI
+    }
   });
 
-  const hashRoute = (location.hash || "").replace("#", "").trim();
+  const hashRoute = String(location.hash || "")
+    .replace("#", "")
+    .trim();
+
   navigate(hashRoute || state.route || "home", true);
 
   registerSW();
@@ -70,9 +79,12 @@ function normalizeState(s) {
   merged.orders = Array.isArray(merged.orders) ? merged.orders : [];
   merged.cashMoves = Array.isArray(merged.cashMoves) ? merged.cashMoves : [];
 
-  merged.ui.saleCart = merged.ui.saleCart && typeof merged.ui.saleCart === "object" ? merged.ui.saleCart : {};
+  merged.ui.saleCart =
+    merged.ui.saleCart && typeof merged.ui.saleCart === "object" ? merged.ui.saleCart : {};
   merged.ui.orderDraftItems =
-    merged.ui.orderDraftItems && typeof merged.ui.orderDraftItems === "object" ? merged.ui.orderDraftItems : {};
+    merged.ui.orderDraftItems && typeof merged.ui.orderDraftItems === "object"
+      ? merged.ui.orderDraftItems
+      : {};
 
   merged.theme = merged.theme === "light" ? "light" : "dark";
   merged.route = merged.route || "home";
@@ -105,15 +117,21 @@ function syncThemeIcon(btnTheme) {
 }
 
 function navigate(route, silent = false) {
-  const r = String(route || "home").trim();
+  const r = String(route || "home")
+    .replace("#", "")
+    .trim();
+
   state.route = r || "home";
   persist();
 
-  qsa(".nav__item").forEach((b) => b.classList.toggle("is-active", b.dataset.route === state.route));
+  qsa(".nav__item").forEach((b) =>
+    b.classList.toggle("is-active", b.dataset.route === state.route)
+  );
+
   render(state.route);
 
   try {
-    if ((location.hash || "").replace("#", "") !== state.route) {
+    if (String(location.hash || "").replace("#", "") !== state.route) {
       history.replaceState(null, "", `#${state.route}`);
     }
   } catch (_) {}
@@ -125,6 +143,8 @@ function render(route) {
   const root = qs("#viewRoot");
   if (!root) return;
 
+  const r = route || state.route || "home";
+
   // ✅ LOGIN SUPABASE (padrão)
   if (state.auth.mode === "supabase") {
     if (!session) {
@@ -134,7 +154,7 @@ function render(route) {
   }
 
   // ✅ PIN (opcional)
-  if (state.auth.mode === "pin" && state.auth?.enabled && !state.auth?.unlocked && route !== "more") {
+  if (state.auth.mode === "pin" && state.auth?.enabled && !state.auth?.unlocked && r !== "more") {
     renderPinLockScreen(root);
     return;
   }
@@ -148,7 +168,7 @@ function render(route) {
     more: () => renderMore(root),
   };
 
-  (routes[route] || routes.home)();
+  (routes[r] || routes.home)();
 }
 
 /* =========================================================
@@ -308,7 +328,9 @@ function renderHome(root) {
       <div style="display:flex;justify-content:space-between;align-items:flex-end;gap:10px">
         <div>
           <div style="font-weight:900">🎯 Meta de lucro do mês</div>
-          <div class="muted" style="font-size:12px;margin-top:4px">${escapeHtml(state.mesRef || monthKey())}</div>
+          <div class="muted" style="font-size:12px;margin-top:4px">${escapeHtml(
+            state.mesRef || monthKey()
+          )}</div>
         </div>
         <button class="btn btn--small" id="btnEditMeta" type="button">Editar</button>
       </div>
@@ -486,12 +508,16 @@ function renderSale(root) {
 
       <div class="field mt-12">
         <div class="label">Desconto</div>
-        <input type="text" inputmode="decimal" class="input" id="inpDiscount" placeholder="0,00" value="${formatMoneyInput(desconto)}" />
+        <input type="text" inputmode="decimal" class="input" id="inpDiscount" placeholder="0,00" value="${formatMoneyInput(
+          desconto
+        )}" />
       </div>
 
       <div class="field mt-12">
         <div class="label">Acréscimo (entrega, etc)</div>
-        <input type="text" inputmode="decimal" class="input" id="inpExtra" placeholder="0,00" value="${formatMoneyInput(acrescimo)}" />
+        <input type="text" inputmode="decimal" class="input" id="inpExtra" placeholder="0,00" value="${formatMoneyInput(
+          acrescimo
+        )}" />
       </div>
 
       ${
@@ -499,7 +525,9 @@ function renderSale(root) {
           ? `
         <div class="field mt-12">
           <div class="label">Recebido em dinheiro</div>
-          <input type="text" inputmode="decimal" class="input" id="inpRecebido" placeholder="0,00" value="${formatMoneyInput(recebido)}" />
+          <input type="text" inputmode="decimal" class="input" id="inpRecebido" placeholder="0,00" value="${formatMoneyInput(
+            recebido
+          )}" />
         </div>
       `
           : ""
@@ -519,7 +547,9 @@ function renderSale(root) {
         </div>
 
         <div class="row">
-          <div class="kpi"><b>Taxa</b><span id="saleTaxaLabel">${metodo === "cartao" ? "2.99%" : "Sem taxa"}</span></div>
+          <div class="kpi"><b>Taxa</b><span id="saleTaxaLabel">${
+            metodo === "cartao" ? "2.99%" : "Sem taxa"
+          }</span></div>
           <div class="value" id="saleTaxa">${brl(totals.taxa)}</div>
         </div>
 
@@ -821,7 +851,6 @@ function renderProductAddRow(product, cart) {
 
 /* =========================================================
    ORDERS / PRODUCTS / REPORTS / MORE
-   (mantive seu comportamento, só ajustei o "Mais" p/ incluir logout)
 ========================================================= */
 
 function renderOrders(root) {
@@ -886,7 +915,9 @@ function renderOrderRow(order) {
     <div class="row">
       <div class="kpi">
         <b>${escapeHtml(order.cliente || "Sem nome")}</b>
-        <span>${statusIcon} ${escapeHtml(status)} | Total: ${brl(order.total || 0)} | Lucro: ${brl(order.lucroEstimado || 0)}</span>
+        <span>${statusIcon} ${escapeHtml(status)} | Total: ${brl(order.total || 0)} | Lucro: ${brl(
+    order.lucroEstimado || 0
+  )}</span>
       </div>
 
       <div style="display:flex;gap:8px;flex-wrap:wrap">
@@ -922,12 +953,16 @@ function showOrderModal(orderId, root) {
 
         <div class="field">
           <label class="label">Nome do cliente</label>
-          <input type="text" class="input" id="inpCliente" placeholder="Ex: Maria Silva" value="${escapeHtml(order?.cliente || "")}" />
+          <input type="text" class="input" id="inpCliente" placeholder="Ex: Maria Silva" value="${escapeHtml(
+            order?.cliente || ""
+          )}" />
         </div>
 
         <div class="field mt-12">
           <label class="label">WhatsApp (opcional)</label>
-          <input type="text" class="input" id="inpWhats" placeholder="Ex: 11999999999" value="${escapeHtml(order?.whats || "")}" />
+          <input type="text" class="input" id="inpWhats" placeholder="Ex: 11999999999" value="${escapeHtml(
+            order?.whats || ""
+          )}" />
         </div>
 
         <div class="field mt-12">
@@ -937,7 +972,9 @@ function showOrderModal(orderId, root) {
 
         <div class="field mt-12">
           <label class="label">Taxa de entrega</label>
-          <input type="text" inputmode="decimal" class="input" id="inpTaxa" placeholder="0,00" value="${formatMoneyInput(taxaEntregaBase)}" />
+          <input type="text" inputmode="decimal" class="input" id="inpTaxa" placeholder="0,00" value="${formatMoneyInput(
+            taxaEntregaBase
+          )}" />
         </div>
 
         <div style="font-weight:900;margin-top:16px;margin-bottom:10px">📦 Produtos</div>
@@ -961,7 +998,9 @@ function showOrderModal(orderId, root) {
 
         <div class="field mt-12">
           <label class="label">Sinal</label>
-          <input type="text" inputmode="decimal" class="input" id="inpSinal" placeholder="0,00" value="${formatMoneyInput(sinalBase)}" />
+          <input type="text" inputmode="decimal" class="input" id="inpSinal" placeholder="0,00" value="${formatMoneyInput(
+            sinalBase
+          )}" />
         </div>
 
         <div class="carttotal">
@@ -1206,18 +1245,24 @@ function showProductModal(productId, root) {
 
         <div class="field">
           <label class="label">Nome do produto</label>
-          <input type="text" class="input" id="inpNome" placeholder="Ex: Bolo no pote" value="${escapeHtml(product?.nome || "")}" />
+          <input type="text" class="input" id="inpNome" placeholder="Ex: Bolo no pote" value="${escapeHtml(
+            product?.nome || ""
+          )}" />
         </div>
 
         <div class="fieldgrid mt-12">
           <div class="field">
             <label class="label">Preço de venda</label>
-            <input type="text" inputmode="decimal" class="input" id="inpPreco" placeholder="0,00" value="${formatMoneyInput(product?.preco || 0)}" />
+            <input type="text" inputmode="decimal" class="input" id="inpPreco" placeholder="0,00" value="${formatMoneyInput(
+              product?.preco || 0
+            )}" />
           </div>
 
           <div class="field">
             <label class="label">Custo unitário</label>
-            <input type="text" inputmode="decimal" class="input" id="inpCusto" placeholder="0,00" value="${formatMoneyInput(product?.custo || 0)}" />
+            <input type="text" inputmode="decimal" class="input" id="inpCusto" placeholder="0,00" value="${formatMoneyInput(
+              product?.custo || 0
+            )}" />
           </div>
         </div>
 
@@ -1413,7 +1458,9 @@ function renderMore(root) {
 
       <div class="field">
         <label class="label">Nome da confeitaria</label>
-        <input type="text" class="input" id="inpStoreName" placeholder="Ex: Doces da Ana" value="${escapeHtml(state.storeName || "")}" />
+        <input type="text" class="input" id="inpStoreName" placeholder="Ex: Doces da Ana" value="${escapeHtml(
+          state.storeName || ""
+        )}" />
       </div>
 
       <div style="height:10px"></div>
@@ -1457,8 +1504,12 @@ function renderMore(root) {
         <div style="height:10px"></div>
         <button class="btn" id="btnSavePin" style="width:100%" type="button">Salvar PIN</button>
 
-        ${isAuthOn ? `<div style="height:8px"></div>
-        <button class="btn" id="btnLockNow" style="width:100%" type="button">🔒 Bloquear agora</button>` : ""}
+        ${
+          isAuthOn
+            ? `<div style="height:8px"></div>
+        <button class="btn" id="btnLockNow" style="width:100%" type="button">🔒 Bloquear agora</button>`
+            : ""
+        }
       `
       }
     </section>
@@ -1725,9 +1776,14 @@ function renderWeekTable(week) {
         </tr>
       </thead>
       <tbody>
-        ${week.map((d) => {
-          const label = new Date(d.date).toLocaleDateString("pt-BR", { weekday: "short", month: "2-digit", day: "2-digit" });
-          return `
+        ${week
+          .map((d) => {
+            const label = new Date(d.date).toLocaleDateString("pt-BR", {
+              weekday: "short",
+              month: "2-digit",
+              day: "2-digit",
+            });
+            return `
             <tr>
               <td>${escapeHtml(label)}</td>
               <td>${brl(d.faturamento)}</td>
@@ -1735,7 +1791,8 @@ function renderWeekTable(week) {
               <td style="color:var(--good)">${brl(d.lucro)}</td>
             </tr>
           `;
-        }).join("")}
+          })
+          .join("")}
       </tbody>
     </table>
   `;
@@ -1816,7 +1873,7 @@ function registerSW() {
   if (location.hostname === "127.0.0.1" || location.hostname === "localhost") return;
 
   if ("serviceWorker" in navigator) {
-    navigator.serviceWorker.register("./sw.js").catch(() => {});
+    navigator.serviceWorker.register("/sw.js").catch(() => {});
   }
 }
 
