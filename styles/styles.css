@@ -1037,3 +1037,145 @@ input:-webkit-autofill:focus {
 .nav__item:focus-visible {
   box-shadow: var(--ring);
 }
+
+/* =========================================================
+   ✅ CTA — Registrar saída (PRO + VISÍVEL)
+========================================================= */
+
+/* tokens extras (seguro e consistente) */
+:root {
+  --danger1: #ff4d6d;
+  --danger2: #ff7a59;
+  --dangerGlow1: rgba(255, 77, 109, 0.22);
+  --dangerGlow2: rgba(255, 122, 89, 0.18);
+}
+
+/* 1) Se o botão for .btn + .btn--danger (recomendado) */
+.btn.btn--danger {
+  border: 0;
+  color: #fff;
+  background: linear-gradient(135deg, rgba(255, 77, 109, 0.98), rgba(255, 122, 89, 0.98));
+  box-shadow:
+    0 18px 55px var(--dangerGlow1),
+    0 18px 55px var(--dangerGlow2),
+    0 0 0 1px rgba(255,255,255,0.10) inset;
+  letter-spacing: -0.1px;
+}
+
+/* Hover (desktop) */
+@media (hover:hover) and (pointer:fine) {
+  .btn.btn--danger:hover {
+    transform: translateY(-2px);
+    filter: brightness(1.02);
+    box-shadow:
+      0 22px 65px rgba(255, 77, 109, 0.26),
+      0 22px 65px rgba(255, 122, 89, 0.20),
+      0 0 0 1px rgba(255,255,255,0.14) inset;
+  }
+}
+
+/* Active (mobile) */
+.btn.btn--danger:active {
+  transform: scale(0.99);
+}
+
+/* Foco acessível e bonito */
+.btn.btn--danger:focus-visible {
+  box-shadow:
+    0 0 0 4px rgba(255, 77, 109, 0.22),
+    0 0 0 1px rgba(255,255,255,0.16) inset,
+    0 22px 65px rgba(255, 77, 109, 0.22);
+}
+
+/* 2) Se você tiver/usar uma classe específica no HTML (sem mexer em lógica) */
+.btn--cta-danger,
+.btn--saida,
+.btn--out,
+.registrar-saida {
+  border: 0;
+  color: #fff;
+  background: linear-gradient(135deg, rgba(255, 77, 109, 0.98), rgba(255, 122, 89, 0.98));
+  box-shadow:
+    0 18px 55px var(--dangerGlow1),
+    0 18px 55px var(--dangerGlow2),
+    0 0 0 1px rgba(255,255,255,0.10) inset;
+  letter-spacing: -0.1px;
+}
+
+/* 3) Se a área tiver wrapper de “saídas”, tenta capturar botão lá dentro */
+.saidas .btn,
+.saida .btn,
+#saidas .btn {
+  border: 0;
+  color: #fff;
+  background: linear-gradient(135deg, rgba(255, 77, 109, 0.98), rgba(255, 122, 89, 0.98));
+  box-shadow:
+    0 18px 55px var(--dangerGlow1),
+    0 18px 55px var(--dangerGlow2),
+    0 0 0 1px rgba(255,255,255,0.10) inset;
+}
+
+/* ✅ 3.5) FIX: seu botão é #btnCashOut (no Home) e vem só com class="btn" */
+#btnCashOut,
+button#btnCashOut {
+  border: 0;
+  color: #fff;
+  background: linear-gradient(135deg, rgba(255, 77, 109, 0.98), rgba(255, 122, 89, 0.98));
+  box-shadow:
+    0 18px 55px var(--dangerGlow1),
+    0 18px 55px var(--dangerGlow2),
+    0 0 0 1px rgba(255,255,255,0.10) inset;
+  letter-spacing: -0.1px;
+}
+
+@media (hover:hover) and (pointer:fine) {
+  #btnCashOut:hover,
+  button#btnCashOut:hover {
+    transform: translateY(-2px);
+    filter: brightness(1.02);
+    box-shadow:
+      0 22px 65px rgba(255, 77, 109, 0.26),
+      0 22px 65px rgba(255, 122, 89, 0.20),
+      0 0 0 1px rgba(255,255,255,0.14) inset;
+  }
+}
+
+#btnCashOut:active,
+button#btnCashOut:active {
+  transform: scale(0.99);
+}
+
+#btnCashOut:focus-visible,
+button#btnCashOut:focus-visible {
+  box-shadow:
+    0 0 0 4px rgba(255, 77, 109, 0.22),
+    0 0 0 1px rgba(255,255,255,0.16) inset,
+    0 22px 65px rgba(255, 77, 109, 0.22);
+}
+
+/* 4) Não deixar “apagado” sem querer */
+.btn:not([disabled]) { opacity: 1; }
+
+/* Mantém disabled com cara de disabled */
+.btn[disabled],
+button[disabled] {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+/* Light theme: premium sem estourar */
+:root[data-theme="light"] .btn.btn--danger,
+:root[data-theme="light"] .btn--cta-danger,
+:root[data-theme="light"] .btn--saida,
+:root[data-theme="light"] .btn--out,
+:root[data-theme="light"] .registrar-saida,
+:root[data-theme="light"] .saidas .btn,
+:root[data-theme="light"] .saida .btn,
+:root[data-theme="light"] #saidas .btn,
+:root[data-theme="light"] #btnCashOut,
+:root[data-theme="light"] button#btnCashOut {
+  box-shadow:
+    0 14px 38px rgba(255, 77, 109, 0.18),
+    0 14px 38px rgba(255, 122, 89, 0.14),
+    0 0 0 1px rgba(0,0,0,0.06) inset;
+}

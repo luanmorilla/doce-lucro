@@ -380,7 +380,8 @@ function renderHome(root) {
       </div>
 
       <div style="height:10px"></div>
-      <button class="btn" id="btnCashOut" style="width:100%" type="button">➖ Registrar saída</button>
+      <!-- ✅ ALTERAÇÃO: botão virou CTA danger premium -->
+      <button class="btn btn--danger btn--cta-danger" id="btnCashOut" style="width:100%" type="button">➖ Registrar saída</button>
     </section>
 
     <div style="height:12px"></div>
