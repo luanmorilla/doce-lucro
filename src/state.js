@@ -1,13 +1,7 @@
 const KEY = "doce_lucro_state_v1";
 
 export function newId() {
-  try {
-    // evita ReferenceError se crypto não existir
-    if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
-      return crypto.randomUUID();
-    }
-  } catch (_) {}
-  return `id_${Date.now()}_${Math.random().toString(16).slice(2)}`;
+  return crypto?.randomUUID?.() || `id_${Date.now()}_${Math.random().toString(16).slice(2)}`;
 }
 
 export function getDefaultState() {
@@ -31,6 +25,9 @@ export function getDefaultState() {
       saleExtra: 0,
       saleReceived: 0,
       orderDraftItems: {},
+
+      // ✅ NOVO: rascunho do formulário da encomenda (pra não apagar ao clicar + / -)
+      orderDraftForm: {},
     },
 
     // ✅ Auth
@@ -48,12 +45,7 @@ export function getDefaultState() {
 export function loadState() {
   try {
     const raw = localStorage.getItem(KEY);
-    if (!raw) return null;
-
-    const parsed = JSON.parse(raw);
-    if (!parsed || typeof parsed !== "object") return null;
-
-    return parsed;
+    return raw ? JSON.parse(raw) : null;
   } catch {
     return null;
   }
@@ -61,8 +53,7 @@ export function loadState() {
 
 export function saveState(state) {
   try {
-    const raw = JSON.stringify(state);
-    localStorage.setItem(KEY, raw);
+    localStorage.setItem(KEY, JSON.stringify(state));
   } catch {}
 }
 

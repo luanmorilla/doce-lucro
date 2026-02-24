@@ -71,8 +71,12 @@ function normalizeState(s) {
   merged.cashMoves = Array.isArray(merged.cashMoves) ? merged.cashMoves : [];
 
   merged.ui.saleCart = merged.ui.saleCart && typeof merged.ui.saleCart === "object" ? merged.ui.saleCart : {};
+
+  // ✅ rascunhos (itens + formulário) por key (new / edit:<id>)
   merged.ui.orderDraftItems =
     merged.ui.orderDraftItems && typeof merged.ui.orderDraftItems === "object" ? merged.ui.orderDraftItems : {};
+  merged.ui.orderDraftForm =
+    merged.ui.orderDraftForm && typeof merged.ui.orderDraftForm === "object" ? merged.ui.orderDraftForm : {};
 
   merged.theme = merged.theme === "light" ? "light" : "dark";
   merged.route = merged.route || "home";
@@ -843,6 +847,9 @@ function renderProductAddRow(product, cart) {
    - mostra data na lista
    - botão "Entregue" (recebe restante + lança venda + caixa)
    - botão para registrar sinal no caixa
+   ✅ correções:
+   - modal não apaga nome/whats/data ao clicar +
+   - inputs de dinheiro limpam 0,00 ao focar
 ========================================================= */
 
 function renderOrders(root) {
@@ -918,7 +925,9 @@ function renderOrderRow(order) {
       <div class="kpi">
         <b>${escapeHtml(order.cliente || "Sem nome")}</b>
         <span>
-          ${statusIcon} ${escapeHtml(status)} • ${escapeHtml(dateLabel)} • Total: ${brl(total)} • Sinal: ${brl(sinal)} • Falta: ${brl(restante)}
+          ${statusIcon} ${escapeHtml(status)} • ${escapeHtml(dateLabel)} • Total: ${brl(total)} • Sinal: ${brl(
+    sinal
+  )} • Falta: ${brl(restante)}
         </span>
       </div>
 
@@ -938,7 +947,6 @@ function renderOrderRow(order) {
 function formatOrderDateLabel(order) {
   const retirada = String(order?.dataRetirada || "").trim();
   if (retirada) {
-    // yyyy-mm-dd -> dd/mm/yyyy
     try {
       const d = new Date(`${retirada}T00:00:00`);
       const br = d.toLocaleDateString("pt-BR");
@@ -970,7 +978,6 @@ function markOrderDelivered(orderId, root) {
 
   // segurança: não duplicar lançamentos
   if (order.entregaRegistrada === true) {
-    // ainda assim marca status se alguém alterou manualmente
     state.orders[idx] = { ...order, status: "entregue" };
     persist();
     toast("Encomenda já estava entregue ✅", "info");
@@ -978,15 +985,17 @@ function markOrderDelivered(orderId, root) {
     return;
   }
 
-  // confirma
   const ok = confirm(
-    `Marcar como ENTREGUE?\n\nCliente: ${order.cliente || "—"}\nTotal: ${brl(total)}\nSinal: ${brl(sinal)}\nFalta receber: ${brl(restante)}`
+    `Marcar como ENTREGUE?\n\nCliente: ${order.cliente || "—"}\nTotal: ${brl(total)}\nSinal: ${brl(
+      sinal
+    )}\nFalta receber: ${brl(restante)}`
   );
   if (!ok) return;
 
   // 1) registra no caixa o restante (se houver)
   if (restante > 0) {
-    const tipo = order.metodoRestante === "dinheiro" ? "dinheiro" : order.metodoRestante === "cartao" ? "cartao" : "pix";
+    const tipo =
+      order.metodoRestante === "dinheiro" ? "dinheiro" : order.metodoRestante === "cartao" ? "cartao" : "pix";
     state.cashMoves.push({
       id: newId(),
       date: todayKey(),
@@ -997,8 +1006,7 @@ function markOrderDelivered(orderId, root) {
     });
   }
 
-  // 2) registra a venda para entrar nos relatórios/lucro (uma única vez)
-  //    taxaCartao = 0 (encomenda não calcula taxa aqui)
+  // 2) registra a venda (1x) para relatórios/lucro
   state.sales.push({
     id: newId(),
     date: todayKey(),
@@ -1013,7 +1021,6 @@ function markOrderDelivered(orderId, root) {
     totalCusto: Number(order.totalCusto || 0),
     taxaCartao: 0,
     lucro: calcProfit(total, Number(order.totalCusto || 0), 0),
-    // campo extra só pra referência (não quebra nada)
     ref: { type: "order", orderId: order.id },
   });
 
@@ -1035,18 +1042,27 @@ function showOrderModal(orderId, root) {
   const order = orderId ? state.orders.find((o) => o.id === orderId) : null;
   const isEdit = !!order;
 
-  const itemsById = isEdit ? order.itemsById || {} : state.ui.orderDraftItems || {};
+  const key = draftKeyForOrder(orderId);
+
+  // ✅ rascunho do formulário (pra não apagar ao clicar +)
+  const draft = getOrderDraft(orderId, order);
+
+  // ✅ itens por key (new / edit:<id>)
+  const itemsBox =
+    state.ui.orderDraftItems && typeof state.ui.orderDraftItems === "object" ? state.ui.orderDraftItems : {};
+  const itemsById = { ...((itemsBox[key] && typeof itemsBox[key] === "object" ? itemsBox[key] : null) || order?.itemsById || {}) };
 
   const items = cartToItems(itemsById, products);
   const subtotal = items.reduce((a, i) => a + i.qty * i.unitPrice, 0);
   const totalCusto = items.reduce((a, i) => a + i.qty * i.unitCost, 0);
 
-  const taxaEntregaBase = Number(order?.taxaEntrega || 0);
-  const sinalBase = Number(order?.sinal || 0);
+  const taxaEntregaBase = Number(draft?.taxaEntrega || 0);
+  const sinalBase = Number(draft?.sinal || 0);
   const total = subtotal + taxaEntregaBase;
 
-  const metodoSinal = order?.metodoSinal || "pix";
-  const metodoRestante = order?.metodoRestante || "pix";
+  const metodoSinal = draft?.metodoSinal || order?.metodoSinal || "pix";
+  const metodoRestante = draft?.metodoRestante || order?.metodoRestante || "pix";
+  const statusDraft = draft?.status || order?.status || "aberta";
   const sinalRegistrado = order?.sinalRegistrado === true;
 
   const html = `
@@ -1059,22 +1075,28 @@ function showOrderModal(orderId, root) {
 
         <div class="field">
           <label class="label">Nome do cliente</label>
-          <input type="text" class="input" id="inpCliente" placeholder="Ex: Maria Silva" value="${escapeHtml(order?.cliente || "")}" />
+          <input type="text" class="input" id="inpCliente" placeholder="Ex: Maria Silva" value="${escapeHtml(
+            draft?.cliente || ""
+          )}" />
         </div>
 
         <div class="field mt-12">
           <label class="label">WhatsApp (opcional)</label>
-          <input type="text" class="input" id="inpWhats" placeholder="Ex: 11999999999" value="${escapeHtml(order?.whats || "")}" />
+          <input type="text" class="input" id="inpWhats" placeholder="Ex: 11999999999" value="${escapeHtml(
+            draft?.whats || ""
+          )}" />
         </div>
 
         <div class="field mt-12">
           <label class="label">Data de retirada</label>
-          <input type="date" class="input" id="inpData" value="${escapeHtml(order?.dataRetirada || "")}" />
+          <input type="date" class="input" id="inpData" value="${escapeHtml(draft?.dataRetirada || "")}" />
         </div>
 
         <div class="field mt-12">
           <label class="label">Taxa de entrega</label>
-          <input type="text" inputmode="decimal" class="input" id="inpTaxa" placeholder="0,00" value="${formatMoneyInput(taxaEntregaBase)}" />
+          <input type="text" inputmode="decimal" class="input" id="inpTaxa" placeholder="0,00" value="${formatMoneyInput(
+            taxaEntregaBase
+          )}" />
         </div>
 
         <div style="font-weight:900;margin-top:16px;margin-bottom:10px">📦 Produtos</div>
@@ -1098,7 +1120,9 @@ function showOrderModal(orderId, root) {
 
         <div class="field mt-12">
           <label class="label">Sinal</label>
-          <input type="text" inputmode="decimal" class="input" id="inpSinal" placeholder="0,00" value="${formatMoneyInput(sinalBase)}" />
+          <input type="text" inputmode="decimal" class="input" id="inpSinal" placeholder="0,00" value="${formatMoneyInput(
+            sinalBase
+          )}" />
           <div class="muted" style="font-size:12px;margin-top:6px">Se o cliente já pagou sinal, você pode registrar no caixa aqui.</div>
         </div>
 
@@ -1149,9 +1173,9 @@ function showOrderModal(orderId, root) {
         <div class="field mt-12">
           <label class="label">Status</label>
           <select class="select" id="selStatus">
-            <option value="aberta" ${(order?.status || "aberta") === "aberta" ? "selected" : ""}>Aberta</option>
-            <option value="entregue" ${order?.status === "entregue" ? "selected" : ""}>Entregue</option>
-            <option value="cancelada" ${order?.status === "cancelada" ? "selected" : ""}>Cancelada</option>
+            <option value="aberta" ${statusDraft === "aberta" ? "selected" : ""}>Aberta</option>
+            <option value="entregue" ${statusDraft === "entregue" ? "selected" : ""}>Entregue</option>
+            <option value="cancelada" ${statusDraft === "cancelada" ? "selected" : ""}>Cancelada</option>
           </select>
         </div>
 
@@ -1173,13 +1197,34 @@ function showOrderModal(orderId, root) {
   const container = qs("#modalContainer");
   container.innerHTML = html;
 
-  const modal = qs(".modal");
-  qs("#closeModal")?.addEventListener("click", () => modal.remove());
+  const modal = container.querySelector(".modal");
+  container.querySelector("#closeModal")?.addEventListener("click", () => modal?.remove());
   modal?.addEventListener("click", (e) => {
     if (e.target === modal) modal.remove();
   });
 
-  qsa("[data-op]").forEach((btn) => {
+  // ✅ limpa "0,00" ao focar + seleciona valor se tiver
+  bindMoneyInputClearOnFocus(container, ["inpTaxa", "inpSinal"]);
+
+  // ✅ mantém rascunho do formulário sempre atualizado (pra não apagar ao clicar +)
+  container.addEventListener("input", (e) => {
+    const el = e.target;
+    if (!(el instanceof HTMLInputElement) && !(el instanceof HTMLSelectElement)) return;
+
+    if (el.id === "inpCliente") setOrderDraft(orderId, { cliente: el.value });
+    if (el.id === "inpWhats") setOrderDraft(orderId, { whats: el.value });
+    if (el.id === "inpData") setOrderDraft(orderId, { dataRetirada: el.value });
+
+    if (el.id === "inpTaxa") setOrderDraft(orderId, { taxaEntrega: parseMoneyInput(el.value) });
+    if (el.id === "inpSinal") setOrderDraft(orderId, { sinal: parseMoneyInput(el.value) });
+
+    if (el.id === "selMetodoSinal") setOrderDraft(orderId, { metodoSinal: el.value });
+    if (el.id === "selMetodoRestante") setOrderDraft(orderId, { metodoRestante: el.value });
+    if (el.id === "selStatus") setOrderDraft(orderId, { status: el.value });
+  });
+
+  // ✅ +/− produtos sem apagar campos
+  container.querySelectorAll("[data-op]").forEach((btn) => {
     btn.addEventListener("click", () => {
       const prodId = btn.dataset.prod;
       const op = btn.dataset.op;
@@ -1188,22 +1233,26 @@ function showOrderModal(orderId, root) {
       itemsById[prodId] = op === "plus" ? q + 1 : Math.max(0, q - 1);
       if (itemsById[prodId] === 0) delete itemsById[prodId];
 
-      state.ui.orderDraftItems = itemsById;
+      // salva itemsById por key
+      const box = state.ui.orderDraftItems && typeof state.ui.orderDraftItems === "object" ? state.ui.orderDraftItems : {};
+      box[key] = itemsById;
+      state.ui.orderDraftItems = box;
+
       persist();
       showOrderModal(orderId, root);
     });
   });
 
   // ✅ registrar sinal no caixa (somente edição)
-  qs("#btnRegisterSinal")?.addEventListener("click", () => {
+  container.querySelector("#btnRegisterSinal")?.addEventListener("click", () => {
     if (!isEdit) return;
     const idx = state.orders.findIndex((o) => o.id === orderId);
     if (idx < 0) return;
 
-    const sinal = parseMoneyInput(qs("#inpSinal")?.value || "0");
+    const sinal = parseMoneyInput(container.querySelector("#inpSinal")?.value || "0");
     if (!sinal || sinal <= 0) return toast("Defina um valor de sinal maior que 0.", "error");
 
-    const metodoSinal = qs("#selMetodoSinal")?.value || "pix";
+    const metodoSinal = container.querySelector("#selMetodoSinal")?.value || "pix";
 
     const current = state.orders[idx];
     if (current.sinalRegistrado === true) return toast("Sinal já foi registrado.", "info");
@@ -1231,15 +1280,15 @@ function showOrderModal(orderId, root) {
     showOrderModal(orderId, root);
   });
 
-  qs("#btnSaveOrder")?.addEventListener("click", () => {
-    const cliente = (qs("#inpCliente")?.value || "").trim();
-    const whats = (qs("#inpWhats")?.value || "").trim();
-    const dataRetirada = qs("#inpData")?.value || "";
-    const taxaEntrega = parseMoneyInput(qs("#inpTaxa")?.value || "0");
-    const sinal = parseMoneyInput(qs("#inpSinal")?.value || "0");
-    const status = qs("#selStatus")?.value || "aberta";
-    const metodoSinal = qs("#selMetodoSinal")?.value || "pix";
-    const metodoRestante = qs("#selMetodoRestante")?.value || "pix";
+  container.querySelector("#btnSaveOrder")?.addEventListener("click", () => {
+    const cliente = (container.querySelector("#inpCliente")?.value || "").trim();
+    const whats = (container.querySelector("#inpWhats")?.value || "").trim();
+    const dataRetirada = container.querySelector("#inpData")?.value || "";
+    const taxaEntrega = parseMoneyInput(container.querySelector("#inpTaxa")?.value || "0");
+    const sinal = parseMoneyInput(container.querySelector("#inpSinal")?.value || "0");
+    const status = container.querySelector("#selStatus")?.value || "aberta";
+    const metodoSinal = container.querySelector("#selMetodoSinal")?.value || "pix";
+    const metodoRestante = container.querySelector("#selMetodoRestante")?.value || "pix";
 
     if (!cliente) return toast("Preencha o nome do cliente", "error");
     if (Object.keys(itemsById).length === 0) return toast("Adicione pelo menos um produto", "error");
@@ -1296,18 +1345,30 @@ function showOrderModal(orderId, root) {
       });
     }
 
-    state.ui.orderDraftItems = {};
+    // limpa rascunhos desta encomenda
+    clearOrderDraft(orderId);
+    const box = state.ui.orderDraftItems && typeof state.ui.orderDraftItems === "object" ? state.ui.orderDraftItems : {};
+    if (box[key]) delete box[key];
+    state.ui.orderDraftItems = box;
+
     persist();
-    modal.remove();
+    modal?.remove();
     toast(`Encomenda ${isEdit ? "atualizada" : "criada"} ✅`, "success");
     renderOrders(root);
   });
 
-  qs("#btnDeleteOrder")?.addEventListener("click", () => {
+  container.querySelector("#btnDeleteOrder")?.addEventListener("click", () => {
     if (confirm("Tem certeza que quer deletar esta encomenda?")) {
       state.orders = state.orders.filter((o) => o.id !== orderId);
+
+      // limpa rascunhos desta encomenda
+      clearOrderDraft(orderId);
+      const box = state.ui.orderDraftItems && typeof state.ui.orderDraftItems === "object" ? state.ui.orderDraftItems : {};
+      if (box[key]) delete box[key];
+      state.ui.orderDraftItems = box;
+
       persist();
-      modal.remove();
+      modal?.remove();
       toast("Encomenda deletada ✅", "success");
       renderOrders(root);
     }
@@ -1467,31 +1528,31 @@ function showProductModal(productId, root) {
   const container = qs("#modalContainer");
   container.innerHTML = html;
 
-  const modal = qs(".modal");
-  qs("#closeModal")?.addEventListener("click", () => modal.remove());
+  const modal = container.querySelector(".modal");
+  container.querySelector("#closeModal")?.addEventListener("click", () => modal?.remove());
   modal?.addEventListener("click", (e) => {
     if (e.target === modal) modal.remove();
   });
 
-  const inpPreco = qs("#inpPreco");
-  const inpCusto = qs("#inpCusto");
-  const marginDisplay = qs("#marginDisplay");
+  const inpPreco = container.querySelector("#inpPreco");
+  const inpCusto = container.querySelector("#inpCusto");
+  const marginDisplay = container.querySelector("#marginDisplay");
 
   const updateMargin = () => {
     const preco = parseMoneyInput(inpPreco?.value || "0");
     const custo = parseMoneyInput(inpCusto?.value || "0");
     const margin = Math.round(calcMargin(preco, custo));
-    marginDisplay.textContent = `${margin}%`;
+    if (marginDisplay) marginDisplay.textContent = `${margin}%`;
   };
 
   inpPreco?.addEventListener("input", updateMargin);
   inpCusto?.addEventListener("input", updateMargin);
   updateMargin();
 
-  qs("#btnSaveProduct")?.addEventListener("click", () => {
-    const nome = (qs("#inpNome")?.value || "").trim();
-    const preco = parseMoneyInput(qs("#inpPreco")?.value || "0");
-    const custo = parseMoneyInput(qs("#inpCusto")?.value || "0");
+  container.querySelector("#btnSaveProduct")?.addEventListener("click", () => {
+    const nome = (container.querySelector("#inpNome")?.value || "").trim();
+    const preco = parseMoneyInput(container.querySelector("#inpPreco")?.value || "0");
+    const custo = parseMoneyInput(container.querySelector("#inpCusto")?.value || "0");
 
     if (!nome) return toast("Preencha o nome do produto", "error");
     if (!Number.isFinite(preco) || preco <= 0) return toast("Preço inválido", "error");
@@ -1505,16 +1566,16 @@ function showProductModal(productId, root) {
     }
 
     persist();
-    modal.remove();
+    modal?.remove();
     toast(`Produto ${isEdit ? "atualizado" : "criado"} ✅`, "success");
     renderProducts(root);
   });
 
-  qs("#btnDeleteProduct")?.addEventListener("click", () => {
+  container.querySelector("#btnDeleteProduct")?.addEventListener("click", () => {
     if (confirm("Deletar produto?")) {
       state.products = state.products.filter((p) => p.id !== productId);
       persist();
-      modal.remove();
+      modal?.remove();
       toast("Produto deletado ✅", "success");
       renderProducts(root);
     }
@@ -1729,7 +1790,6 @@ function renderMore(root) {
     render(state.route || "home");
   });
 
-  // PIN controls (se modo pin)
   qs("#btnTogglePin")?.addEventListener("click", () => {
     const enable = !(state.auth?.enabled === true);
 
@@ -1796,6 +1856,67 @@ function renderMore(root) {
 /* =========================================================
    HELPERS
 ========================================================= */
+function draftKeyForOrder(orderId) {
+  return orderId ? `edit:${orderId}` : "new";
+}
+
+function getOrderDraft(orderId, baseOrder = null) {
+  const key = draftKeyForOrder(orderId);
+  const draft = (state.ui.orderDraftForm || {})[key];
+
+  if (draft && typeof draft === "object") return { ...draft };
+
+  const init = {
+    cliente: baseOrder?.cliente || "",
+    whats: baseOrder?.whats || "",
+    dataRetirada: baseOrder?.dataRetirada || "",
+    taxaEntrega: Number(baseOrder?.taxaEntrega || 0),
+    sinal: Number(baseOrder?.sinal || 0),
+    status: baseOrder?.status || "aberta",
+    metodoSinal: baseOrder?.metodoSinal || "pix",
+    metodoRestante: baseOrder?.metodoRestante || "pix",
+  };
+
+  setOrderDraft(orderId, init);
+  return init;
+}
+
+function setOrderDraft(orderId, patch) {
+  const key = draftKeyForOrder(orderId);
+  const box = state.ui.orderDraftForm && typeof state.ui.orderDraftForm === "object" ? state.ui.orderDraftForm : {};
+  box[key] = { ...(box[key] || {}), ...(patch || {}) };
+  state.ui.orderDraftForm = box;
+  persist();
+}
+
+function clearOrderDraft(orderId) {
+  const key = draftKeyForOrder(orderId);
+  const box = state.ui.orderDraftForm && typeof state.ui.orderDraftForm === "object" ? state.ui.orderDraftForm : {};
+  if (box[key]) delete box[key];
+  state.ui.orderDraftForm = box;
+  persist();
+}
+
+// ✅ UX: ao focar em campos de dinheiro, se for "0,00" limpa; senão seleciona tudo
+function bindMoneyInputClearOnFocus(root, ids = []) {
+  ids.forEach((id) => {
+    const el = root.querySelector(`#${id}`);
+    if (!el || !(el instanceof HTMLInputElement)) return;
+
+    el.addEventListener("focus", () => {
+      const raw = String(el.value || "").trim();
+      const v = parseMoneyInput(raw);
+      if (!raw || v === 0) {
+        el.value = "";
+        return;
+      }
+      try {
+        el.select();
+      } catch {}
+    });
+  });
+}
+
 function radioPill(_name, value, label, checked) {
   return `
     <button
@@ -1882,9 +2003,15 @@ function restoreFocusState(snap) {
   } catch (_) {}
 }
 
-function todayKey() { return new Date().toISOString().slice(0, 10); }
-function monthKey() { return new Date().toISOString().slice(0, 7); }
-function yearKey() { return new Date().toISOString().slice(0, 4); }
+function todayKey() {
+  return new Date().toISOString().slice(0, 10);
+}
+function monthKey() {
+  return new Date().toISOString().slice(0, 7);
+}
+function yearKey() {
+  return new Date().toISOString().slice(0, 4);
+}
 
 function getTodaySummary() {
   const key = todayKey();
@@ -1946,9 +2073,10 @@ function renderWeekTable(week) {
         </tr>
       </thead>
       <tbody>
-        ${week.map((d) => {
-          const label = new Date(d.date).toLocaleDateString("pt-BR", { weekday: "short", month: "2-digit", day: "2-digit" });
-          return `
+        ${week
+          .map((d) => {
+            const label = new Date(d.date).toLocaleDateString("pt-BR", { weekday: "short", month: "2-digit", day: "2-digit" });
+            return `
             <tr>
               <td>${escapeHtml(label)}</td>
               <td>${brl(d.faturamento)}</td>
@@ -1956,7 +2084,8 @@ function renderWeekTable(week) {
               <td style="color:var(--good)">${brl(d.lucro)}</td>
             </tr>
           `;
-        }).join("")}
+          })
+          .join("")}
       </tbody>
     </table>
   `;
