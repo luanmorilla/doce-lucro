@@ -903,7 +903,7 @@ function renderOrders(root) {
         }
       }
 
-      if (action === "delivered") {
+      if (action === "delivered" || action === "mark-delivered") {
         markOrderDelivered(oid, root);
       }
     });
@@ -912,7 +912,12 @@ function renderOrders(root) {
 
 function renderOrderRow(order) {
   const status = order.status || "aberta";
-  const statusIcon = status === "entregue" ? "✅" : status === "cancelada" ? "❌" : "⏳";
+  const statusIcon =
+    status === "entregue"
+      ? "✅"
+      : status === "cancelada"
+      ? "❌"
+      : "⏳";
 
   const total = Number(order.total || 0);
   const sinal = Number(order.sinal || 0);
@@ -925,20 +930,42 @@ function renderOrderRow(order) {
       <div class="kpi">
         <b>${escapeHtml(order.cliente || "Sem nome")}</b>
         <span>
-          ${statusIcon} ${escapeHtml(status)} • ${escapeHtml(dateLabel)} • Total: ${brl(total)} • Sinal: ${brl(
-    sinal
-  )} • Falta: ${brl(restante)}
+          ${statusIcon} ${escapeHtml(status)} • 
+          ${escapeHtml(dateLabel)} • 
+          Total: ${brl(total)} • 
+          Sinal: ${brl(sinal)} • 
+          Falta: ${brl(restante)}
         </span>
       </div>
 
       <div style="display:flex;gap:8px;flex-wrap:wrap">
         ${
           status === "aberta"
-            ? `<button class="btn btn--small btn--brand" data-order-id="${order.id}" data-action="delivered" type="button">✅ Entregue</button>`
-            : ""
+            ? `<button 
+                class="btn btn--small btn--brand" 
+                data-order-id="${order.id}" 
+                data-action="mark-delivered" 
+                type="button">
+                📦 Marcar como entregue
+              </button>`
+            : `<span class="badge badge--good">✅ Entregue</span>`
         }
-        <button class="btn btn--small" data-order-id="${order.id}" data-action="edit" type="button">Editar</button>
-        <button class="btn btn--small btn--danger" data-order-id="${order.id}" data-action="delete" type="button">Deletar</button>
+
+        <button 
+          class="btn btn--small" 
+          data-order-id="${order.id}" 
+          data-action="edit" 
+          type="button">
+          Editar
+        </button>
+
+        <button 
+          class="btn btn--small btn--danger" 
+          data-order-id="${order.id}" 
+          data-action="delete" 
+          type="button">
+          Deletar
+        </button>
       </div>
     </div>
   `;

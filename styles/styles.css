@@ -81,8 +81,8 @@
   --stroke2: rgba(0, 0, 0, 0.16);
 
   --text: rgba(0, 0, 0, 0.90);
-  --muted: rgba(0, 0, 0, 0.62);   /* +contraste */
-  --muted2: rgba(0, 0, 0, 0.48);  /* +contraste */
+  --muted: rgba(0, 0, 0, 0.62);
+  --muted2: rgba(0, 0, 0, 0.48);
 
   --shadow: 0 16px 50px rgba(0, 0, 0, 0.10);
   --shadowSoft: 0 10px 30px rgba(0, 0, 0, 0.08);
@@ -115,8 +115,6 @@ body {
   overflow-x: hidden;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
-
-  /* mobile tap feel */
   -webkit-tap-highlight-color: rgba(255, 79, 163, 0.18);
 }
 
@@ -550,78 +548,6 @@ button { font-family: inherit; }
 .table tr + tr td { border-top: 1px solid rgba(255, 255, 255, 0.06); }
 :root[data-theme="light"] .table tr + tr td { border-top: 1px solid rgba(0, 0, 0, 0.06); }
 
-/* ---------------------------
-   NAV (Bottom Dock)
---------------------------- */
-.nav {
-  position: fixed;
-  left: 50%;
-  transform: translateX(-50%);
-  bottom: max(calc(var(--nav-gap) + var(--safeBottom)), 12px);
-  width: min(var(--maxw), calc(100% - 20px));
-  padding: 10px 10px;
-
-  display: flex;
-  gap: 8px;
-  justify-content: space-between;
-
-  background: rgba(0, 0, 0, 0.62);
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  border-radius: 24px;
-
-  backdrop-filter: var(--glass);
-  -webkit-backdrop-filter: var(--glass);
-
-  box-shadow: var(--shadow);
-  z-index: 60;
-  min-height: var(--nav-h);
-}
-
-:root[data-theme="light"] .nav {
-  background: rgba(255, 255, 255, 0.94);
-  border: 1px solid rgba(0, 0, 0, 0.08);
-}
-
-.nav__item {
-  flex: 1;
-  border: 1px solid transparent;
-  background: transparent;
-  color: var(--muted);
-
-  border-radius: 18px;
-  padding: 10px 8px;
-
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 6px;
-
-  cursor: pointer;
-  transition: var(--transition);
-  font-size: 11px;
-  min-height: 54px;
-}
-
-@media (hover:hover) and (pointer:fine) {
-  .nav__item:hover { background: var(--hl); }
-}
-.nav__item:active { transform: scale(0.99); }
-
-.nav__item.is-active {
-  color: var(--text);
-  background: var(--hl2);
-  border-color: var(--stroke2);
-}
-
-.nav__icon { font-size: 18px; line-height: 1; }
-.nav__label { font-size: 11px; font-weight: 950; line-height: 1.1; }
-
-@media (max-width: 380px) {
-  .nav__label { font-size: 10px; }
-  .nav__item { padding: 9px 6px; }
-}
-
 @media (min-width: 920px) {
   .topbar { padding-left: 22px; padding-right: 22px; }
   .content { padding-left: 22px; padding-right: 22px; }
@@ -956,14 +882,23 @@ input:-webkit-autofill:focus {
 .items-center { align-items: center; }
 .justify-between { justify-content: space-between; }
 .justify-center { justify-content: center; }
-/* =========================================================
-   NAV — SaaS Dock (Premium)  ✅ (só visual)
-   Cole no FINAL do styles.css
-========================================================= */
 
-/* base do dock mais “premium” */
+/* =========================================================
+   NAV — SaaS Dock (Premium) ✅ (único bloco, sem duplicar)
+========================================================= */
 .nav {
+  position: fixed;
+  left: 50%;
+  transform: translateX(-50%);
+  bottom: max(calc(var(--nav-gap) + var(--safeBottom)), 12px);
+  width: min(var(--maxw), calc(100% - 20px));
+  min-height: var(--nav-h);
+
   padding: 10px 10px;
+  display: flex;
+  gap: 8px;
+  justify-content: space-between;
+
   border-radius: 26px;
 
   background: rgba(0, 0, 0, 0.58);
@@ -975,9 +910,10 @@ input:-webkit-autofill:focus {
   box-shadow:
     0 18px 55px rgba(0, 0, 0, 0.55),
     0 0 0 1px rgba(255, 255, 255, 0.04) inset;
+
+  z-index: 60;
 }
 
-/* light dock */
 :root[data-theme="light"] .nav {
   background: rgba(255, 255, 255, 0.92);
   border: 1px solid rgba(0, 0, 0, 0.08);
@@ -986,19 +922,31 @@ input:-webkit-autofill:focus {
     0 0 0 1px rgba(0, 0, 0, 0.03) inset;
 }
 
-/* itens: menos “quadrado”, mais “dock” */
 .nav__item {
   position: relative;
+  flex: 1;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--muted);
+
   border-radius: 18px;
-  min-height: 56px;
+  padding: 10px 8px;
+
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
   gap: 6px;
 
-  /* evita “pulo” no toque */
+  cursor: pointer;
+  transition: var(--transition);
+  font-size: 11px;
+  min-height: 56px;
+
   transform: translateZ(0);
   will-change: transform;
 }
 
-/* hover só no desktop */
 @media (hover:hover) and (pointer:fine) {
   .nav__item:hover {
     background: rgba(255, 255, 255, 0.06);
@@ -1008,12 +956,10 @@ input:-webkit-autofill:focus {
   }
 }
 
-/* toque no mobile */
 .nav__item:active {
   transform: scale(0.985);
 }
 
-/* ícone com consistência */
 .nav__icon {
   font-size: 18px;
   line-height: 1;
@@ -1021,12 +967,17 @@ input:-webkit-autofill:focus {
   transition: var(--transition);
 }
 
-/* label um tiquinho mais “forte” */
 .nav__label {
   font-size: 11px;
   font-weight: 950;
   letter-spacing: -0.1px;
+  line-height: 1.1;
   transition: var(--transition);
+}
+
+@media (max-width: 380px) {
+  .nav__label { font-size: 10px; }
+  .nav__item { padding: 9px 6px; }
 }
 
 /* ===== estado ativo (SaaS) ===== */
@@ -1034,7 +985,6 @@ input:-webkit-autofill:focus {
   color: var(--text);
   border-color: transparent;
 
-  /* pílula suave + brilho */
   background: linear-gradient(
     180deg,
     rgba(255, 255, 255, 0.14),
@@ -1057,12 +1007,11 @@ input:-webkit-autofill:focus {
     0 0 0 1px rgba(0, 0, 0, 0.05) inset;
 }
 
-/* ícone ativo com “lift” sutil */
 .nav__item.is-active .nav__icon {
   transform: translateY(-1px) scale(1.03);
 }
 
-/* indicador (bolinha/barra) com brand gradient */
+/* indicador com brand gradient */
 .nav__item.is-active::after {
   content: "";
   position: absolute;
@@ -1079,14 +1028,12 @@ input:-webkit-autofill:focus {
   opacity: 0.95;
 }
 
-/* em telas bem pequenas, reduz um pouco o indicador */
 @media (max-width: 360px) {
   .nav__item.is-active::after {
     width: 18px;
   }
 }
 
-/* acessibilidade: foco */
 .nav__item:focus-visible {
   box-shadow: var(--ring);
 }
