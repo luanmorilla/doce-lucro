@@ -70,7 +70,7 @@
 }
 
 /* ---------------------------
-   RESET / BASE
+   RESET / BASE (mais robusto)
 --------------------------- */
 * { box-sizing: border-box; }
 
@@ -87,6 +87,9 @@ body {
     linear-gradient(180deg, var(--bg), var(--bg2));
   overflow-x: hidden;
 }
+
+img, svg, video, canvas { max-width: 100%; height: auto; display: block; }
+input, select, textarea, button { font: inherit; }
 
 a { color: inherit; text-decoration: none; }
 button { font-family: inherit; }
@@ -456,7 +459,7 @@ button { font-family: inherit; }
 :root[data-theme="light"] .table tr + tr td { border-top: 1px solid rgba(0, 0, 0, 0.06); }
 
 /* ---------------------------
-   NAV (Bottom Dock) ✅ CORRIGIDO
+   NAV (Bottom Dock)
 --------------------------- */
 .nav {
   position: fixed;

@@ -4,9 +4,14 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
   <title>Doce Lucro</title>
-  <link rel="manifest" href="./manifest.webmanifest">
-  <link rel="stylesheet" href="./styles.css" />
+
+  <!-- Manifest -->
+  <link rel="manifest" href="/manifest.webmanifest">
+
+  <!-- CSS (corrigido para pasta styles) -->
+  <link rel="stylesheet" href="/styles/styles.css?v=1" />
 </head>
+
 <body>
   <div class="app">
     <header class="topbar">
@@ -36,22 +41,27 @@
         <div class="nav__icon">🏠</div>
         <div class="nav__label">Início</div>
       </button>
+
       <button class="nav__item" data-route="sale" type="button">
         <div class="nav__icon">💳</div>
         <div class="nav__label">Venda</div>
       </button>
+
       <button class="nav__item" data-route="orders" type="button">
         <div class="nav__icon">📦</div>
         <div class="nav__label">Encom.</div>
       </button>
+
       <button class="nav__item" data-route="products" type="button">
         <div class="nav__icon">🎂</div>
         <div class="nav__label">Produtos</div>
       </button>
+
       <button class="nav__item" data-route="reports" type="button">
         <div class="nav__icon">📈</div>
         <div class="nav__label">Relatórios</div>
       </button>
+
       <button class="nav__item" data-route="more" type="button">
         <div class="nav__icon">⚙️</div>
         <div class="nav__label">Mais</div>
@@ -61,6 +71,7 @@
     <div id="modalContainer"></div>
   </div>
 
-  <script type="module" src="./src/app.js"></script>
+  <!-- JS principal -->
+  <script type="module" src="/src/app.js"></script>
 </body>
 </html>

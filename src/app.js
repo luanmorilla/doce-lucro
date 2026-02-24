@@ -1812,7 +1812,12 @@ function seedDemo() {
 }
 
 function registerSW() {
-  if ("serviceWorker" in navigator) navigator.serviceWorker.register("./sw.js").catch(() => {});
+  // Durante DEV (Live Server), não registra service worker pra não cachear arquivos
+  if (location.hostname === "127.0.0.1" || location.hostname === "localhost") return;
+
+  if ("serviceWorker" in navigator) {
+    navigator.serviceWorker.register("./sw.js").catch(() => {});
+  }
 }
 
 // start
