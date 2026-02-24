@@ -24,9 +24,7 @@ async function mount() {
   });
 
   window.addEventListener("hashchange", () => {
-    const r = String(location.hash || "")
-      .replace("#", "")
-      .trim();
+    const r = (location.hash || "").replace("#", "").trim();
     if (r) navigate(r, true);
   });
 
@@ -39,18 +37,11 @@ async function mount() {
 
   // Listener: mudanças de auth (login/logout)
   supabase.auth.onAuthStateChange(async (_event, newSession) => {
-    try {
-      session = newSession;
-      render(state.route || "home");
-    } catch {
-      // não derruba a UI
-    }
+    session = newSession;
+    render(state.route || "home");
   });
 
-  const hashRoute = String(location.hash || "")
-    .replace("#", "")
-    .trim();
-
+  const hashRoute = (location.hash || "").replace("#", "").trim();
   navigate(hashRoute || state.route || "home", true);
 
   registerSW();
@@ -79,12 +70,9 @@ function normalizeState(s) {
   merged.orders = Array.isArray(merged.orders) ? merged.orders : [];
   merged.cashMoves = Array.isArray(merged.cashMoves) ? merged.cashMoves : [];
 
-  merged.ui.saleCart =
-    merged.ui.saleCart && typeof merged.ui.saleCart === "object" ? merged.ui.saleCart : {};
+  merged.ui.saleCart = merged.ui.saleCart && typeof merged.ui.saleCart === "object" ? merged.ui.saleCart : {};
   merged.ui.orderDraftItems =
-    merged.ui.orderDraftItems && typeof merged.ui.orderDraftItems === "object"
-      ? merged.ui.orderDraftItems
-      : {};
+    merged.ui.orderDraftItems && typeof merged.ui.orderDraftItems === "object" ? merged.ui.orderDraftItems : {};
 
   merged.theme = merged.theme === "light" ? "light" : "dark";
   merged.route = merged.route || "home";
@@ -103,6 +91,24 @@ function normalizeState(s) {
   merged.auth.pin = typeof merged.auth.pin === "string" ? merged.auth.pin : "";
   merged.auth.unlocked = merged.auth.unlocked === true;
 
+  // ✅ compat/normalização de encomendas antigas
+  merged.orders = (merged.orders || []).map((o) => {
+    const total = Number(o?.total || 0);
+    const sinal = Number(o?.sinal || 0);
+    return {
+      ...o,
+      total,
+      sinal,
+      createdAt: o?.createdAt || new Date().toISOString(),
+      status: o?.status || "aberta",
+      // novos campos (não quebram nada)
+      metodoSinal: o?.metodoSinal || "pix",
+      metodoRestante: o?.metodoRestante || "pix",
+      sinalRegistrado: o?.sinalRegistrado === true,
+      entregaRegistrada: o?.entregaRegistrada === true,
+    };
+  });
+
   return merged;
 }
 
@@ -117,21 +123,15 @@ function syncThemeIcon(btnTheme) {
 }
 
 function navigate(route, silent = false) {
-  const r = String(route || "home")
-    .replace("#", "")
-    .trim();
-
+  const r = String(route || "home").trim();
   state.route = r || "home";
   persist();
 
-  qsa(".nav__item").forEach((b) =>
-    b.classList.toggle("is-active", b.dataset.route === state.route)
-  );
-
+  qsa(".nav__item").forEach((b) => b.classList.toggle("is-active", b.dataset.route === state.route));
   render(state.route);
 
   try {
-    if (String(location.hash || "").replace("#", "") !== state.route) {
+    if ((location.hash || "").replace("#", "") !== state.route) {
       history.replaceState(null, "", `#${state.route}`);
     }
   } catch (_) {}
@@ -143,8 +143,6 @@ function render(route) {
   const root = qs("#viewRoot");
   if (!root) return;
 
-  const r = route || state.route || "home";
-
   // ✅ LOGIN SUPABASE (padrão)
   if (state.auth.mode === "supabase") {
     if (!session) {
@@ -154,7 +152,7 @@ function render(route) {
   }
 
   // ✅ PIN (opcional)
-  if (state.auth.mode === "pin" && state.auth?.enabled && !state.auth?.unlocked && r !== "more") {
+  if (state.auth.mode === "pin" && state.auth?.enabled && !state.auth?.unlocked && route !== "more") {
     renderPinLockScreen(root);
     return;
   }
@@ -168,7 +166,7 @@ function render(route) {
     more: () => renderMore(root),
   };
 
-  (routes[r] || routes.home)();
+  (routes[route] || routes.home)();
 }
 
 /* =========================================================
@@ -328,9 +326,7 @@ function renderHome(root) {
       <div style="display:flex;justify-content:space-between;align-items:flex-end;gap:10px">
         <div>
           <div style="font-weight:900">🎯 Meta de lucro do mês</div>
-          <div class="muted" style="font-size:12px;margin-top:4px">${escapeHtml(
-            state.mesRef || monthKey()
-          )}</div>
+          <div class="muted" style="font-size:12px;margin-top:4px">${escapeHtml(state.mesRef || monthKey())}</div>
         </div>
         <button class="btn btn--small" id="btnEditMeta" type="button">Editar</button>
       </div>
@@ -508,16 +504,12 @@ function renderSale(root) {
 
       <div class="field mt-12">
         <div class="label">Desconto</div>
-        <input type="text" inputmode="decimal" class="input" id="inpDiscount" placeholder="0,00" value="${formatMoneyInput(
-          desconto
-        )}" />
+        <input type="text" inputmode="decimal" class="input" id="inpDiscount" placeholder="0,00" value="${formatMoneyInput(desconto)}" />
       </div>
 
       <div class="field mt-12">
         <div class="label">Acréscimo (entrega, etc)</div>
-        <input type="text" inputmode="decimal" class="input" id="inpExtra" placeholder="0,00" value="${formatMoneyInput(
-          acrescimo
-        )}" />
+        <input type="text" inputmode="decimal" class="input" id="inpExtra" placeholder="0,00" value="${formatMoneyInput(acrescimo)}" />
       </div>
 
       ${
@@ -525,9 +517,7 @@ function renderSale(root) {
           ? `
         <div class="field mt-12">
           <div class="label">Recebido em dinheiro</div>
-          <input type="text" inputmode="decimal" class="input" id="inpRecebido" placeholder="0,00" value="${formatMoneyInput(
-            recebido
-          )}" />
+          <input type="text" inputmode="decimal" class="input" id="inpRecebido" placeholder="0,00" value="${formatMoneyInput(recebido)}" />
         </div>
       `
           : ""
@@ -547,9 +537,7 @@ function renderSale(root) {
         </div>
 
         <div class="row">
-          <div class="kpi"><b>Taxa</b><span id="saleTaxaLabel">${
-            metodo === "cartao" ? "2.99%" : "Sem taxa"
-          }</span></div>
+          <div class="kpi"><b>Taxa</b><span id="saleTaxaLabel">${metodo === "cartao" ? "2.99%" : "Sem taxa"}</span></div>
           <div class="value" id="saleTaxa">${brl(totals.taxa)}</div>
         </div>
 
@@ -850,7 +838,11 @@ function renderProductAddRow(product, cart) {
 }
 
 /* =========================================================
-   ORDERS / PRODUCTS / REPORTS / MORE
+   ORDERS
+   ✅ melhorias:
+   - mostra data na lista
+   - botão "Entregue" (recebe restante + lança venda + caixa)
+   - botão para registrar sinal no caixa
 ========================================================= */
 
 function renderOrders(root) {
@@ -903,6 +895,10 @@ function renderOrders(root) {
           renderOrders(root);
         }
       }
+
+      if (action === "delivered") {
+        markOrderDelivered(oid, root);
+      }
     });
   });
 }
@@ -911,21 +907,127 @@ function renderOrderRow(order) {
   const status = order.status || "aberta";
   const statusIcon = status === "entregue" ? "✅" : status === "cancelada" ? "❌" : "⏳";
 
+  const total = Number(order.total || 0);
+  const sinal = Number(order.sinal || 0);
+  const restante = Math.max(0, total - sinal);
+
+  const dateLabel = formatOrderDateLabel(order);
+
   return `
     <div class="row">
       <div class="kpi">
         <b>${escapeHtml(order.cliente || "Sem nome")}</b>
-        <span>${statusIcon} ${escapeHtml(status)} | Total: ${brl(order.total || 0)} | Lucro: ${brl(
-    order.lucroEstimado || 0
-  )}</span>
+        <span>
+          ${statusIcon} ${escapeHtml(status)} • ${escapeHtml(dateLabel)} • Total: ${brl(total)} • Sinal: ${brl(sinal)} • Falta: ${brl(restante)}
+        </span>
       </div>
 
       <div style="display:flex;gap:8px;flex-wrap:wrap">
+        ${
+          status === "aberta"
+            ? `<button class="btn btn--small btn--brand" data-order-id="${order.id}" data-action="delivered" type="button">✅ Entregue</button>`
+            : ""
+        }
         <button class="btn btn--small" data-order-id="${order.id}" data-action="edit" type="button">Editar</button>
         <button class="btn btn--small btn--danger" data-order-id="${order.id}" data-action="delete" type="button">Deletar</button>
       </div>
     </div>
   `;
+}
+
+function formatOrderDateLabel(order) {
+  const retirada = String(order?.dataRetirada || "").trim();
+  if (retirada) {
+    // yyyy-mm-dd -> dd/mm/yyyy
+    try {
+      const d = new Date(`${retirada}T00:00:00`);
+      const br = d.toLocaleDateString("pt-BR");
+      return `Retirada: ${br}`;
+    } catch {
+      return `Retirada: ${retirada}`;
+    }
+  }
+  const createdAt = order?.createdAt ? new Date(order.createdAt) : null;
+  if (createdAt && !Number.isNaN(createdAt.getTime())) {
+    return `Pedido: ${createdAt.toLocaleDateString("pt-BR")}`;
+  }
+  return "Pedido: —";
+}
+
+function markOrderDelivered(orderId, root) {
+  const idx = state.orders.findIndex((o) => o.id === orderId);
+  if (idx < 0) return;
+
+  const order = state.orders[idx];
+  if ((order.status || "aberta") !== "aberta") {
+    toast("Essa encomenda não está aberta.", "error");
+    return;
+  }
+
+  const total = Number(order.total || 0);
+  const sinal = Number(order.sinal || 0);
+  const restante = Math.max(0, total - sinal);
+
+  // segurança: não duplicar lançamentos
+  if (order.entregaRegistrada === true) {
+    // ainda assim marca status se alguém alterou manualmente
+    state.orders[idx] = { ...order, status: "entregue" };
+    persist();
+    toast("Encomenda já estava entregue ✅", "info");
+    renderOrders(root);
+    return;
+  }
+
+  // confirma
+  const ok = confirm(
+    `Marcar como ENTREGUE?\n\nCliente: ${order.cliente || "—"}\nTotal: ${brl(total)}\nSinal: ${brl(sinal)}\nFalta receber: ${brl(restante)}`
+  );
+  if (!ok) return;
+
+  // 1) registra no caixa o restante (se houver)
+  if (restante > 0) {
+    const tipo = order.metodoRestante === "dinheiro" ? "dinheiro" : order.metodoRestante === "cartao" ? "cartao" : "pix";
+    state.cashMoves.push({
+      id: newId(),
+      date: todayKey(),
+      tipo,
+      valor: restante,
+      createdAt: new Date().toISOString(),
+      note: `Restante encomenda - ${order.cliente || "Cliente"}`,
+    });
+  }
+
+  // 2) registra a venda para entrar nos relatórios/lucro (uma única vez)
+  //    taxaCartao = 0 (encomenda não calcula taxa aqui)
+  state.sales.push({
+    id: newId(),
+    date: todayKey(),
+    createdAt: new Date().toISOString(),
+    metodo: order.metodoRestante || "pix",
+    items: Array.isArray(order.items) ? order.items : [],
+    desconto: 0,
+    acrescimo: 0,
+    recebido: 0,
+    troco: 0,
+    totalVenda: total,
+    totalCusto: Number(order.totalCusto || 0),
+    taxaCartao: 0,
+    lucro: calcProfit(total, Number(order.totalCusto || 0), 0),
+    // campo extra só pra referência (não quebra nada)
+    ref: { type: "order", orderId: order.id },
+  });
+
+  // 3) atualiza encomenda
+  state.orders[idx] = {
+    ...order,
+    status: "entregue",
+    entregaRegistrada: true,
+    entregueEm: new Date().toISOString(),
+  };
+
+  persist();
+  toast("Encomenda entregue ✅ (caixa + relatório atualizados)", "success");
+  renderOrders(root);
 }
 
 function showOrderModal(orderId, root) {
@@ -943,6 +1045,10 @@ function showOrderModal(orderId, root) {
   const sinalBase = Number(order?.sinal || 0);
   const total = subtotal + taxaEntregaBase;
 
+  const metodoSinal = order?.metodoSinal || "pix";
+  const metodoRestante = order?.metodoRestante || "pix";
+  const sinalRegistrado = order?.sinalRegistrado === true;
+
   const html = `
     <div class="modal">
       <div class="modal__content">
@@ -953,16 +1059,12 @@ function showOrderModal(orderId, root) {
 
         <div class="field">
           <label class="label">Nome do cliente</label>
-          <input type="text" class="input" id="inpCliente" placeholder="Ex: Maria Silva" value="${escapeHtml(
-            order?.cliente || ""
-          )}" />
+          <input type="text" class="input" id="inpCliente" placeholder="Ex: Maria Silva" value="${escapeHtml(order?.cliente || "")}" />
         </div>
 
         <div class="field mt-12">
           <label class="label">WhatsApp (opcional)</label>
-          <input type="text" class="input" id="inpWhats" placeholder="Ex: 11999999999" value="${escapeHtml(
-            order?.whats || ""
-          )}" />
+          <input type="text" class="input" id="inpWhats" placeholder="Ex: 11999999999" value="${escapeHtml(order?.whats || "")}" />
         </div>
 
         <div class="field mt-12">
@@ -972,9 +1074,7 @@ function showOrderModal(orderId, root) {
 
         <div class="field mt-12">
           <label class="label">Taxa de entrega</label>
-          <input type="text" inputmode="decimal" class="input" id="inpTaxa" placeholder="0,00" value="${formatMoneyInput(
-            taxaEntregaBase
-          )}" />
+          <input type="text" inputmode="decimal" class="input" id="inpTaxa" placeholder="0,00" value="${formatMoneyInput(taxaEntregaBase)}" />
         </div>
 
         <div style="font-weight:900;margin-top:16px;margin-bottom:10px">📦 Produtos</div>
@@ -998,12 +1098,40 @@ function showOrderModal(orderId, root) {
 
         <div class="field mt-12">
           <label class="label">Sinal</label>
-          <input type="text" inputmode="decimal" class="input" id="inpSinal" placeholder="0,00" value="${formatMoneyInput(
-            sinalBase
-          )}" />
+          <input type="text" inputmode="decimal" class="input" id="inpSinal" placeholder="0,00" value="${formatMoneyInput(sinalBase)}" />
+          <div class="muted" style="font-size:12px;margin-top:6px">Se o cliente já pagou sinal, você pode registrar no caixa aqui.</div>
         </div>
 
-        <div class="carttotal">
+        <div class="field mt-12">
+          <label class="label">Método do sinal</label>
+          <select class="select" id="selMetodoSinal">
+            <option value="pix" ${metodoSinal === "pix" ? "selected" : ""}>Pix</option>
+            <option value="dinheiro" ${metodoSinal === "dinheiro" ? "selected" : ""}>Dinheiro</option>
+            <option value="cartao" ${metodoSinal === "cartao" ? "selected" : ""}>Cartão</option>
+          </select>
+        </div>
+
+        <div class="field mt-12">
+          <label class="label">Método do restante (na entrega)</label>
+          <select class="select" id="selMetodoRestante">
+            <option value="pix" ${metodoRestante === "pix" ? "selected" : ""}>Pix</option>
+            <option value="dinheiro" ${metodoRestante === "dinheiro" ? "selected" : ""}>Dinheiro</option>
+            <option value="cartao" ${metodoRestante === "cartao" ? "selected" : ""}>Cartão</option>
+          </select>
+        </div>
+
+        ${
+          isEdit
+            ? `
+          <div style="height:10px"></div>
+          <button class="btn" id="btnRegisterSinal" style="width:100%" type="button" ${sinalRegistrado ? "disabled" : ""}>
+            ${sinalRegistrado ? "✅ Sinal já registrado no caixa" : "💰 Registrar sinal no caixa"}
+          </button>
+        `
+            : ""
+        }
+
+        <div class="carttotal" style="margin-top:16px">
           <div class="kpi"><b>Total</b></div>
           <div class="big" style="color:var(--brand)">${brl(total)}</div>
         </div>
@@ -1066,6 +1194,43 @@ function showOrderModal(orderId, root) {
     });
   });
 
+  // ✅ registrar sinal no caixa (somente edição)
+  qs("#btnRegisterSinal")?.addEventListener("click", () => {
+    if (!isEdit) return;
+    const idx = state.orders.findIndex((o) => o.id === orderId);
+    if (idx < 0) return;
+
+    const sinal = parseMoneyInput(qs("#inpSinal")?.value || "0");
+    if (!sinal || sinal <= 0) return toast("Defina um valor de sinal maior que 0.", "error");
+
+    const metodoSinal = qs("#selMetodoSinal")?.value || "pix";
+
+    const current = state.orders[idx];
+    if (current.sinalRegistrado === true) return toast("Sinal já foi registrado.", "info");
+
+    const tipo = metodoSinal === "dinheiro" ? "dinheiro" : metodoSinal === "cartao" ? "cartao" : "pix";
+
+    state.cashMoves.push({
+      id: newId(),
+      date: todayKey(),
+      tipo,
+      valor: sinal,
+      createdAt: new Date().toISOString(),
+      note: `Sinal encomenda - ${current.cliente || "Cliente"}`,
+    });
+
+    state.orders[idx] = {
+      ...current,
+      sinal,
+      metodoSinal,
+      sinalRegistrado: true,
+    };
+
+    persist();
+    toast("Sinal registrado no caixa ✅", "success");
+    showOrderModal(orderId, root);
+  });
+
   qs("#btnSaveOrder")?.addEventListener("click", () => {
     const cliente = (qs("#inpCliente")?.value || "").trim();
     const whats = (qs("#inpWhats")?.value || "").trim();
@@ -1073,6 +1238,8 @@ function showOrderModal(orderId, root) {
     const taxaEntrega = parseMoneyInput(qs("#inpTaxa")?.value || "0");
     const sinal = parseMoneyInput(qs("#inpSinal")?.value || "0");
     const status = qs("#selStatus")?.value || "aberta";
+    const metodoSinal = qs("#selMetodoSinal")?.value || "pix";
+    const metodoRestante = qs("#selMetodoRestante")?.value || "pix";
 
     if (!cliente) return toast("Preencha o nome do cliente", "error");
     if (Object.keys(itemsById).length === 0) return toast("Adicione pelo menos um produto", "error");
@@ -1085,8 +1252,9 @@ function showOrderModal(orderId, root) {
     if (isEdit) {
       const idx = state.orders.findIndex((o) => o.id === orderId);
       if (idx >= 0) {
+        const prev = state.orders[idx] || {};
         state.orders[idx] = {
-          ...order,
+          ...prev,
           cliente,
           whats,
           dataRetirada,
@@ -1098,6 +1266,12 @@ function showOrderModal(orderId, root) {
           total,
           totalCusto,
           lucroEstimado: calcProfit(total, totalCusto, 0),
+          metodoSinal,
+          metodoRestante,
+          // mantém flags existentes
+          sinalRegistrado: prev.sinalRegistrado === true,
+          entregaRegistrada: prev.entregaRegistrada === true,
+          createdAt: prev.createdAt || new Date().toISOString(),
         };
       }
     } else {
@@ -1115,6 +1289,10 @@ function showOrderModal(orderId, root) {
         total,
         totalCusto,
         lucroEstimado: calcProfit(total, totalCusto, 0),
+        metodoSinal,
+        metodoRestante,
+        sinalRegistrado: false,
+        entregaRegistrada: false,
       });
     }
 
@@ -1154,6 +1332,10 @@ function renderOrderProductRow(product, itemsById) {
     </div>
   `;
 }
+
+/* =========================================================
+   PRODUCTS / REPORTS / MORE
+========================================================= */
 
 function renderProducts(root) {
   const products = state.products || [];
@@ -1245,24 +1427,18 @@ function showProductModal(productId, root) {
 
         <div class="field">
           <label class="label">Nome do produto</label>
-          <input type="text" class="input" id="inpNome" placeholder="Ex: Bolo no pote" value="${escapeHtml(
-            product?.nome || ""
-          )}" />
+          <input type="text" class="input" id="inpNome" placeholder="Ex: Bolo no pote" value="${escapeHtml(product?.nome || "")}" />
         </div>
 
         <div class="fieldgrid mt-12">
           <div class="field">
             <label class="label">Preço de venda</label>
-            <input type="text" inputmode="decimal" class="input" id="inpPreco" placeholder="0,00" value="${formatMoneyInput(
-              product?.preco || 0
-            )}" />
+            <input type="text" inputmode="decimal" class="input" id="inpPreco" placeholder="0,00" value="${formatMoneyInput(product?.preco || 0)}" />
           </div>
 
           <div class="field">
             <label class="label">Custo unitário</label>
-            <input type="text" inputmode="decimal" class="input" id="inpCusto" placeholder="0,00" value="${formatMoneyInput(
-              product?.custo || 0
-            )}" />
+            <input type="text" inputmode="decimal" class="input" id="inpCusto" placeholder="0,00" value="${formatMoneyInput(product?.custo || 0)}" />
           </div>
         </div>
 
@@ -1458,9 +1634,7 @@ function renderMore(root) {
 
       <div class="field">
         <label class="label">Nome da confeitaria</label>
-        <input type="text" class="input" id="inpStoreName" placeholder="Ex: Doces da Ana" value="${escapeHtml(
-          state.storeName || ""
-        )}" />
+        <input type="text" class="input" id="inpStoreName" placeholder="Ex: Doces da Ana" value="${escapeHtml(state.storeName || "")}" />
       </div>
 
       <div style="height:10px"></div>
@@ -1504,12 +1678,8 @@ function renderMore(root) {
         <div style="height:10px"></div>
         <button class="btn" id="btnSavePin" style="width:100%" type="button">Salvar PIN</button>
 
-        ${
-          isAuthOn
-            ? `<div style="height:8px"></div>
-        <button class="btn" id="btnLockNow" style="width:100%" type="button">🔒 Bloquear agora</button>`
-            : ""
-        }
+        ${isAuthOn ? `<div style="height:8px"></div>
+        <button class="btn" id="btnLockNow" style="width:100%" type="button">🔒 Bloquear agora</button>` : ""}
       `
       }
     </section>
@@ -1776,14 +1946,9 @@ function renderWeekTable(week) {
         </tr>
       </thead>
       <tbody>
-        ${week
-          .map((d) => {
-            const label = new Date(d.date).toLocaleDateString("pt-BR", {
-              weekday: "short",
-              month: "2-digit",
-              day: "2-digit",
-            });
-            return `
+        ${week.map((d) => {
+          const label = new Date(d.date).toLocaleDateString("pt-BR", { weekday: "short", month: "2-digit", day: "2-digit" });
+          return `
             <tr>
               <td>${escapeHtml(label)}</td>
               <td>${brl(d.faturamento)}</td>
@@ -1791,8 +1956,7 @@ function renderWeekTable(week) {
               <td style="color:var(--good)">${brl(d.lucro)}</td>
             </tr>
           `;
-          })
-          .join("")}
+        }).join("")}
       </tbody>
     </table>
   `;
@@ -1873,7 +2037,7 @@ function registerSW() {
   if (location.hostname === "127.0.0.1" || location.hostname === "localhost") return;
 
   if ("serviceWorker" in navigator) {
-    navigator.serviceWorker.register("/sw.js").catch(() => {});
+    navigator.serviceWorker.register("./sw.js").catch(() => {});
   }
 }
 
