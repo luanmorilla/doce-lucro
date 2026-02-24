@@ -1578,10 +1578,10 @@ function renderMore(root) {
 function radioPill(_name, value, label, checked) {
   return `
     <button
-      class="pill"
+      class="pill ${checked ? "is-active" : ""}"
       data-pay="${escapeHtml(value)}"
       type="button"
-      style="${checked ? "background:rgba(255,79,163,0.2);border-color:rgba(255,79,163,0.5)" : ""}"
+      aria-pressed="${checked ? "true" : "false"}"
     >
       ${escapeHtml(label)}
     </button>

@@ -1,5 +1,6 @@
 /* =========================================================
-   DOCE LUCRO — UI PRO (Mobile First / SaaS Feel)
+   DOCE LUCRO — UI PRO (Refinado / Mobile First / SaaS Feel)
+   - Refinamento visual (sem alterar funcionalidade)
 ========================================================= */
 
 /* ---------------------------
@@ -10,43 +11,56 @@
   --bg2: #0b0f1a;
   --bg3: #0f1420;
 
-  --card: rgba(255, 255, 255, 0.06);
+  /* glass/cards */
+  --card: rgba(255, 255, 255, 0.065);
   --card2: rgba(255, 255, 255, 0.035);
-  --stroke: rgba(255, 255, 255, 0.10);
-  --stroke2: rgba(255, 255, 255, 0.16);
+  --stroke: rgba(255, 255, 255, 0.11);
+  --stroke2: rgba(255, 255, 255, 0.18);
 
+  /* text */
   --text: rgba(255, 255, 255, 0.94);
-  --muted: rgba(255, 255, 255, 0.64);
+  --muted: rgba(255, 255, 255, 0.66);
+  --muted2: rgba(255, 255, 255, 0.50);
 
+  /* brand */
   --brand: #ff4fa3;
   --brand2: #7c5cff;
+
+  /* status */
   --good: #2ee59d;
   --bad: #ff5d5d;
   --warn: #ffd166;
   --info: #4db8ff;
 
-  --shadow: 0 24px 90px rgba(0, 0, 0, 0.65);
-  --shadowSoft: 0 12px 40px rgba(0, 0, 0, 0.38);
-  --shadowMed: 0 8px 24px rgba(0, 0, 0, 0.28);
+  /* shadows (mais “premium” e menos pesado) */
+  --shadow: 0 20px 70px rgba(0, 0, 0, 0.55);
+  --shadowSoft: 0 10px 34px rgba(0, 0, 0, 0.32);
+  --shadowMed: 0 10px 30px rgba(0, 0, 0, 0.34);
 
+  /* radii */
   --r: 22px;
   --r2: 16px;
   --r3: 12px;
 
-  /* ✅ MAIS ROBUSTO: safe-area + respiro mínimo (Android corta menos) */
+  /* safe area */
   --safeTop: max(env(safe-area-inset-top, 0px), 0px);
   --safeBottom: max(env(safe-area-inset-bottom, 0px), 12px);
 
   --maxw: 1060px;
 
-  --ring: 0 0 0 4px rgba(255, 79, 163, 0.16);
+  /* focus ring */
+  --ring: 0 0 0 4px rgba(255, 79, 163, 0.18);
   --glass: blur(18px);
 
   --transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
 
-  /* ✅ NAV sizing (pra não cortar no Android) */
+  /* NAV sizing */
   --nav-gap: 10px;
   --nav-h: 78px;
+
+  /* NEW: sizing helpers */
+  --tap: 44px;
+  --tap2: 46px; /* levemente maior */
 }
 
 :root[data-theme="light"] {
@@ -54,23 +68,24 @@
   --bg2: #ffffff;
   --bg3: #fafbfe;
 
-  --card: rgba(0, 0, 0, 0.04);
-  --card2: rgba(0, 0, 0, 0.025);
+  --card: rgba(0, 0, 0, 0.045);
+  --card2: rgba(0, 0, 0, 0.028);
   --stroke: rgba(0, 0, 0, 0.10);
   --stroke2: rgba(0, 0, 0, 0.16);
 
   --text: rgba(0, 0, 0, 0.88);
-  --muted: rgba(0, 0, 0, 0.56);
+  --muted: rgba(0, 0, 0, 0.58);
+  --muted2: rgba(0, 0, 0, 0.44);
 
-  --shadow: 0 18px 60px rgba(0, 0, 0, 0.12);
-  --shadowSoft: 0 12px 40px rgba(0, 0, 0, 0.10);
-  --shadowMed: 0 8px 24px rgba(0, 0, 0, 0.08);
+  --shadow: 0 16px 50px rgba(0, 0, 0, 0.10);
+  --shadowSoft: 0 10px 30px rgba(0, 0, 0, 0.08);
+  --shadowMed: 0 8px 22px rgba(0, 0, 0, 0.10);
 
-  --ring: 0 0 0 4px rgba(124, 92, 255, 0.12);
+  --ring: 0 0 0 4px rgba(124, 92, 255, 0.14);
 }
 
 /* ---------------------------
-   RESET / BASE (mais robusto)
+   RESET / BASE
 --------------------------- */
 * { box-sizing: border-box; }
 
@@ -86,6 +101,8 @@ body {
     radial-gradient(900px 700px at 50% 110%, rgba(46, 229, 157, 0.08), transparent 60%),
     linear-gradient(180deg, var(--bg), var(--bg2));
   overflow-x: hidden;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
 }
 
 img, svg, video, canvas { max-width: 100%; height: auto; display: block; }
@@ -124,16 +141,16 @@ button { font-family: inherit; }
   -webkit-backdrop-filter: var(--glass);
 
   background: linear-gradient(to bottom,
-    rgba(0, 0, 0, 0.55),
-    rgba(0, 0, 0, 0.12)
+    rgba(0, 0, 0, 0.58),
+    rgba(0, 0, 0, 0.10)
   );
   border-bottom: 1px solid rgba(255, 255, 255, 0.08);
 }
 
 :root[data-theme="light"] .topbar {
   background: linear-gradient(to bottom,
-    rgba(255, 255, 255, 0.94),
-    rgba(255, 255, 255, 0.70)
+    rgba(255, 255, 255, 0.96),
+    rgba(255, 255, 255, 0.76)
   );
   border-bottom: 1px solid rgba(0, 0, 0, 0.06);
 }
@@ -161,7 +178,7 @@ button { font-family: inherit; }
   display: grid;
   place-items: center;
 
-  background: linear-gradient(135deg, rgba(255, 79, 163, 0.28), rgba(124, 92, 255, 0.28));
+  background: linear-gradient(135deg, rgba(255, 79, 163, 0.30), rgba(124, 92, 255, 0.30));
   border: 1px solid var(--stroke2);
   box-shadow: var(--shadowSoft);
   font-size: 24px;
@@ -207,8 +224,8 @@ button { font-family: inherit; }
   background: rgba(255, 255, 255, 0.06);
   color: var(--text);
   border-radius: 16px;
-  width: 46px;
-  height: 46px;
+  width: var(--tap2);
+  height: var(--tap2);
   display: grid;
   place-items: center;
   box-shadow: var(--shadowSoft);
@@ -232,7 +249,6 @@ button { font-family: inherit; }
   width: min(var(--maxw), 100%);
   margin: 0 auto;
   padding: 18px 16px;
-  /* ✅ espaço real garantido pra nav + safe area (evita cortar) */
   padding-bottom: calc(var(--nav-h) + 48px + var(--safeBottom));
   flex: 1;
 }
@@ -312,7 +328,7 @@ button { font-family: inherit; }
 --------------------------- */
 .btn {
   border: 1px solid var(--stroke);
-  background: rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.085);
   color: var(--text);
   border-radius: 16px;
   padding: 12px 14px;
@@ -320,11 +336,11 @@ button { font-family: inherit; }
   cursor: pointer;
   transition: var(--transition);
   font-size: 14px;
-  min-height: 44px;
+  min-height: var(--tap);
 }
 
 .btn:hover {
-  background: rgba(255, 255, 255, 0.12);
+  background: rgba(255, 255, 255, 0.13);
   border-color: var(--stroke2);
   transform: translateY(-2px);
 }
@@ -333,14 +349,14 @@ button { font-family: inherit; }
 
 .btn--brand {
   border: 0;
-  background: linear-gradient(135deg, rgba(255, 79, 163, 0.95), rgba(124, 92, 255, 0.95));
+  background: linear-gradient(135deg, rgba(255, 79, 163, 0.98), rgba(124, 92, 255, 0.98));
   box-shadow:
-    0 16px 50px rgba(124, 92, 255, 0.22),
-    0 16px 50px rgba(255, 79, 163, 0.18);
+    0 16px 45px rgba(124, 92, 255, 0.22),
+    0 16px 45px rgba(255, 79, 163, 0.18);
   color: #fff;
 }
 
-.btn--brand:hover { opacity: 0.97; transform: translateY(-2px); }
+.btn--brand:hover { opacity: 0.98; transform: translateY(-2px); }
 
 .btn--small {
   padding: 10px 12px;
@@ -412,7 +428,8 @@ button { font-family: inherit; }
 }
 
 /* ---------------------------
-   PILLS
+   PILLS (Pagamento: Pix/Dinheiro/Cartão)
+   -> Aqui resolve o "apagado" e deixa um pouco maior
 --------------------------- */
 .pillrow {
   display: flex;
@@ -422,19 +439,57 @@ button { font-family: inherit; }
 }
 
 .pill {
-  font-size: 12px;
+  font-size: 13px;              /* +1 pra legibilidade */
   font-weight: 950;
-  padding: 8px 12px;
+  padding: 10px 14px;           /* maior, sem exagero */
   border-radius: 999px;
-  border: 1px solid var(--stroke);
-  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255,255,255,0.16);
+  background: rgba(255, 255, 255, 0.06);
   box-shadow: var(--shadowSoft);
   transition: var(--transition);
   cursor: pointer;
-  min-height: 40px;
+  min-height: var(--tap);       /* área de toque */
+  color: rgba(255,255,255,0.88);
+  letter-spacing: -0.1px;
 }
 
-.pill:hover { background: rgba(255, 255, 255, 0.10); border-color: var(--stroke2); }
+:root[data-theme="light"] .pill{
+  border-color: rgba(0,0,0,0.12);
+  background: rgba(0,0,0,0.04);
+  color: rgba(0,0,0,0.80);
+}
+
+.pill:hover {
+  background: rgba(255, 255, 255, 0.10);
+  border-color: rgba(255,255,255,0.24);
+  transform: translateY(-1px);
+}
+
+:root[data-theme="light"] .pill:hover {
+  background: rgba(0,0,0,0.06);
+  border-color: rgba(0,0,0,0.18);
+}
+
+/* ✅ Estado “selecionado” (se seu JS aplica .is-active OU .active) */
+.pill.is-active,
+.pill.active {
+  background: linear-gradient(135deg, rgba(255,79,163,0.95), rgba(124,92,255,0.95));
+  border-color: transparent;
+  color: #fff;
+  box-shadow:
+    0 14px 40px rgba(255, 79, 163, 0.20),
+    0 14px 40px rgba(124, 92, 255, 0.18);
+}
+
+/* ✅ Também funciona caso você use aria-pressed */
+.pill[aria-pressed="true"]{
+  background: linear-gradient(135deg, rgba(255,79,163,0.95), rgba(124,92,255,0.95));
+  border-color: transparent;
+  color: #fff;
+  box-shadow:
+    0 14px 40px rgba(255, 79, 163, 0.20),
+    0 14px 40px rgba(124, 92, 255, 0.18);
+}
 
 .value { color: var(--text); font-weight: 950; font-size: 13px; }
 
@@ -465,7 +520,6 @@ button { font-family: inherit; }
   position: fixed;
   left: 50%;
   transform: translateX(-50%);
-  /* ✅ mais robusto: garante “respiro” mesmo quando safe-area = 0 */
   bottom: max(calc(var(--nav-gap) + var(--safeBottom)), 12px);
   width: min(var(--maxw), calc(100% - 20px));
   padding: 10px 10px;
@@ -509,7 +563,7 @@ button { font-family: inherit; }
   cursor: pointer;
   transition: var(--transition);
   font-size: 11px;
-  min-height: 52px;
+  min-height: 54px; /* +2 pra ficar mais “tocável” */
 }
 
 .nav__item:hover { background: rgba(255, 255, 255, 0.06); }
@@ -573,7 +627,6 @@ button { font-family: inherit; }
   border: 1px solid rgba(0, 0, 0, 0.10);
 }
 
-/* ✅ mantém o translateX(-50%) consistente (evita “pulo” em alguns browsers) */
 .dl-toast.is-visible { opacity: 1; transform: translateX(-50%) translateY(0); }
 .dl-toast--success { border-color: rgba(46, 229, 157, 0.35); }
 .dl-toast--error { border-color: rgba(255, 93, 93, 0.35); }
@@ -604,7 +657,7 @@ button { font-family: inherit; }
   outline: none;
   transition: var(--transition);
   font-size: 14px;
-  min-height: 44px;
+  min-height: var(--tap);
 }
 
 .input::placeholder { color: rgba(255, 255, 255, 0.42); }
@@ -613,7 +666,7 @@ button { font-family: inherit; }
 .input:focus, .select:focus {
   border-color: rgba(255, 79, 163, 0.45);
   box-shadow: var(--ring);
-  background: rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.09);
 }
 
 .select {
@@ -687,11 +740,11 @@ button { font-family: inherit; }
 :root[data-theme="light"] .qty { background: rgba(0, 0, 0, 0.04); }
 
 .qbtn {
-  width: 38px;
-  height: 38px;
+  width: 40px;   /* +2 */
+  height: 40px;  /* +2 */
   border-radius: 999px;
   border: 1px solid var(--stroke);
-  background: rgba(255, 255, 255, 0.06);
+  background: rgba(255, 255, 255, 0.07);
   color: var(--text);
   font-weight: 950;
   cursor: pointer;
