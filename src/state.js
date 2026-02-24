@@ -24,10 +24,22 @@ export function getDefaultState() {
       saleDiscount: 0,
       saleExtra: 0,
       saleReceived: 0,
+
+      // rascunhos
       orderDraftItems: {},
 
-      // ✅ NOVO: rascunho do formulário da encomenda (pra não apagar ao clicar + / -)
+      // ✅ rascunho do formulário da encomenda (pra não apagar ao clicar + / -)
       orderDraftForm: {},
+
+      // ✅ rascunho da saída
+      cashOutDraft: {
+        tipoMov: "despesa", // "despesa" | "retirada"
+        valor: 0,
+        descricao: "",
+        categoria: "ingredientes",
+        metodo: "dinheiro",
+        data: "",
+      },
     },
 
     // ✅ Auth
@@ -57,6 +69,7 @@ export function saveState(state) {
   } catch {}
 }
 
+// ✅ util interno
 function monthKey() {
   return new Date().toISOString().slice(0, 7);
 }

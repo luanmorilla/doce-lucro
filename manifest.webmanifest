@@ -1,5 +1,5 @@
 {
-  "id": "./",
+  "id": "./index.html",
   "name": "Doce Lucro — Controle de Lucro Real",
   "short_name": "Doce Lucro",
   "description": "Sistema premium para controle de lucro real de docerias. Vendas, encomendas, metas e relatórios em segundos.",
@@ -34,7 +34,7 @@
       "src": "./assets/icons/icon-512.png",
       "sizes": "512x512",
       "type": "image/png",
-      "purpose": "any maskable"
+      "purpose": "maskable"
     }
   ]
 }

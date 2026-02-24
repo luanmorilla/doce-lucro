@@ -378,6 +378,9 @@ function renderHome(root) {
         <div class="kpi"><b>📤 Saídas</b><span>Despesas/retiradas</span></div>
         <div class="badge badge--bad">${brl(cash.saidas)}</div>
       </div>
+
+      <div style="height:10px"></div>
+      <button class="btn" id="btnCashOut" style="width:100%" type="button">➖ Registrar saída</button>
     </section>
 
     <div style="height:12px"></div>
@@ -404,18 +407,14 @@ function renderHome(root) {
     <div style="height:12px"></div>
 
     <button class="btn btn--brand" id="btnQuickSale" type="button">⚡ Fazer venda (balcão)</button>
-    <div style="height:8px"></div>
-    <button class="btn" id="btnSeedDemo" type="button">📊 Inserir dados de teste (demo)</button>
   `;
 
   root.innerHTML = html;
 
   qs("#btnQuickSale")?.addEventListener("click", () => navigate("sale"));
 
-  qs("#btnSeedDemo")?.addEventListener("click", () => {
-    seedDemo();
-    toast("Dados demo inseridos ✅", "success");
-    renderHome(root);
+  qs("#btnCashOut")?.addEventListener("click", () => {
+    showCashOutModal(root);
   });
 
   qs("#btnEditMeta")?.addEventListener("click", () => {
@@ -444,6 +443,96 @@ function statCard(label, value, icon = "") {
       <div class="stat__value">${escapeHtml(value)}</div>
     </div>
   `;
+}
+
+/* =========================================================
+   ✅ SAÍDA DE CAIXA (modal)
+========================================================= */
+function showCashOutModal(_root) {
+  const container = qs("#modalContainer");
+  if (!container) {
+    toast("ModalContainer não encontrado (#modalContainer).", "error");
+    return;
+  }
+
+  const html = `
+    <div class="modal">
+      <div class="modal__content">
+        <div class="modal__header">
+          <div class="modal__title">➖ Registrar saída</div>
+          <button class="modal__close" id="closeModal" type="button">X</button>
+        </div>
+
+        <div class="muted" style="font-size:12px;margin-bottom:12px">
+          Use para retirada pessoal ou despesa do negócio. Isso diminui o saldo do caixa.
+        </div>
+
+        <div class="field">
+          <label class="label">Valor</label>
+          <input type="text" inputmode="decimal" class="input" id="outValor" placeholder="0,00" value="" />
+        </div>
+
+        <div class="field mt-12">
+          <label class="label">Tipo</label>
+          <select class="select" id="outCat">
+            <option value="retirada_pessoal">Retirada pessoal</option>
+            <option value="despesa_negocio">Despesa do negócio</option>
+          </select>
+        </div>
+
+        <div class="field mt-12">
+          <label class="label">Descrição</label>
+          <input type="text" class="input" id="outDesc" placeholder="Ex: mercado, gás, transporte, pró-labore..." value="" />
+        </div>
+
+        <div class="field mt-12">
+          <label class="label">Data</label>
+          <input type="date" class="input" id="outDate" value="${todayKey()}" />
+        </div>
+
+        <div style="height:12px"></div>
+        <button class="btn btn--brand" id="btnSaveOut" style="width:100%" type="button">Salvar saída</button>
+      </div>
+    </div>
+  `;
+
+  container.innerHTML = html;
+
+  const modal = container.querySelector(".modal");
+  container.querySelector("#closeModal")?.addEventListener("click", () => modal?.remove());
+  modal?.addEventListener("click", (e) => {
+    if (e.target === modal) modal.remove();
+  });
+
+  bindMoneyInputClearOnFocus(container, ["outValor"]);
+
+  container.querySelector("#btnSaveOut")?.addEventListener("click", () => {
+    const valor = parseMoneyInput(container.querySelector("#outValor")?.value || "0");
+    const categoria = String(container.querySelector("#outCat")?.value || "retirada_pessoal");
+    const desc = String(container.querySelector("#outDesc")?.value || "").trim();
+    const date = String(container.querySelector("#outDate")?.value || todayKey()).trim() || todayKey();
+
+    if (!Number.isFinite(valor) || valor <= 0) return toast("Informe um valor maior que 0.", "error");
+    if (!desc) return toast("Informe uma descrição.", "error");
+
+    const labelTipo = categoria === "despesa_negocio" ? "Despesa do negócio" : "Retirada pessoal";
+
+    state.cashMoves.push({
+      id: newId(),
+      date,
+      tipo: "saida",
+      valor,
+      createdAt: new Date().toISOString(),
+      note: `${labelTipo}: ${desc}`,
+      categoria,
+      descricao: desc,
+    });
+
+    persist();
+    modal?.remove();
+    toast("Saída registrada ✅", "success");
+    render(state.route || "home");
+  });
 }
 
 /* =========================================================
@@ -843,13 +932,6 @@ function renderProductAddRow(product, cart) {
 
 /* =========================================================
    ORDERS
-   ✅ melhorias:
-   - mostra data na lista
-   - botão "Entregue" (recebe restante + lança venda + caixa)
-   - botão para registrar sinal no caixa
-   ✅ correções:
-   - modal não apaga nome/whats/data ao clicar +
-   - inputs de dinheiro limpam 0,00 ao focar
 ========================================================= */
 
 function renderOrders(root) {
@@ -903,7 +985,7 @@ function renderOrders(root) {
         }
       }
 
-      if (action === "delivered" || action === "mark-delivered") {
+      if (action === "delivered") {
         markOrderDelivered(oid, root);
       }
     });
@@ -912,12 +994,7 @@ function renderOrders(root) {
 
 function renderOrderRow(order) {
   const status = order.status || "aberta";
-  const statusIcon =
-    status === "entregue"
-      ? "✅"
-      : status === "cancelada"
-      ? "❌"
-      : "⏳";
+  const statusIcon = status === "entregue" ? "✅" : status === "cancelada" ? "❌" : "⏳";
 
   const total = Number(order.total || 0);
   const sinal = Number(order.sinal || 0);
@@ -930,42 +1007,22 @@ function renderOrderRow(order) {
       <div class="kpi">
         <b>${escapeHtml(order.cliente || "Sem nome")}</b>
         <span>
-          ${statusIcon} ${escapeHtml(status)} • 
-          ${escapeHtml(dateLabel)} • 
-          Total: ${brl(total)} • 
-          Sinal: ${brl(sinal)} • 
-          Falta: ${brl(restante)}
+          ${statusIcon} ${escapeHtml(status)} • ${escapeHtml(dateLabel)} • Total: ${brl(total)} • Sinal: ${brl(
+    sinal
+  )} • Falta: ${brl(restante)}
         </span>
       </div>
 
       <div style="display:flex;gap:8px;flex-wrap:wrap">
         ${
           status === "aberta"
-            ? `<button 
-                class="btn btn--small btn--brand" 
-                data-order-id="${order.id}" 
-                data-action="mark-delivered" 
-                type="button">
-                📦 Marcar como entregue
-              </button>`
-            : `<span class="badge badge--good">✅ Entregue</span>`
+            ? `<button class="btn btn--small btn--brand" data-order-id="${order.id}" data-action="delivered" type="button">📦 Marcar como entregue</button>`
+            : status === "entregue"
+            ? `<span class="badge badge--good">✅ Entregue</span>`
+            : `<span class="badge badge--bad">❌ Cancelada</span>`
         }
-
-        <button 
-          class="btn btn--small" 
-          data-order-id="${order.id}" 
-          data-action="edit" 
-          type="button">
-          Editar
-        </button>
-
-        <button 
-          class="btn btn--small btn--danger" 
-          data-order-id="${order.id}" 
-          data-action="delete" 
-          type="button">
-          Deletar
-        </button>
+        <button class="btn btn--small" data-order-id="${order.id}" data-action="edit" type="button">Editar</button>
+        <button class="btn btn--small btn--danger" data-order-id="${order.id}" data-action="delete" type="button">Deletar</button>
       </div>
     </div>
   `;
@@ -1077,7 +1134,11 @@ function showOrderModal(orderId, root) {
   // ✅ itens por key (new / edit:<id>)
   const itemsBox =
     state.ui.orderDraftItems && typeof state.ui.orderDraftItems === "object" ? state.ui.orderDraftItems : {};
-  const itemsById = { ...((itemsBox[key] && typeof itemsBox[key] === "object" ? itemsBox[key] : null) || order?.itemsById || {}) };
+  const itemsById = {
+    ...(((itemsBox[key] && typeof itemsBox[key] === "object" ? itemsBox[key] : null) ||
+      order?.itemsById ||
+      {}) ?? {}),
+  };
 
   const items = cartToItems(itemsById, products);
   const subtotal = items.reduce((a, i) => a + i.qty * i.unitPrice, 0);
@@ -1261,7 +1322,8 @@ function showOrderModal(orderId, root) {
       if (itemsById[prodId] === 0) delete itemsById[prodId];
 
       // salva itemsById por key
-      const box = state.ui.orderDraftItems && typeof state.ui.orderDraftItems === "object" ? state.ui.orderDraftItems : {};
+      const box =
+        state.ui.orderDraftItems && typeof state.ui.orderDraftItems === "object" ? state.ui.orderDraftItems : {};
       box[key] = itemsById;
       state.ui.orderDraftItems = box;
 
@@ -1374,7 +1436,8 @@ function showOrderModal(orderId, root) {
 
     // limpa rascunhos desta encomenda
     clearOrderDraft(orderId);
-    const box = state.ui.orderDraftItems && typeof state.ui.orderDraftItems === "object" ? state.ui.orderDraftItems : {};
+    const box =
+      state.ui.orderDraftItems && typeof state.ui.orderDraftItems === "object" ? state.ui.orderDraftItems : {};
     if (box[key]) delete box[key];
     state.ui.orderDraftItems = box;
 
@@ -1390,7 +1453,8 @@ function showOrderModal(orderId, root) {
 
       // limpa rascunhos desta encomenda
       clearOrderDraft(orderId);
-      const box = state.ui.orderDraftItems && typeof state.ui.orderDraftItems === "object" ? state.ui.orderDraftItems : {};
+      const box =
+        state.ui.orderDraftItems && typeof state.ui.orderDraftItems === "object" ? state.ui.orderDraftItems : {};
       if (box[key]) delete box[key];
       state.ui.orderDraftItems = box;
 
