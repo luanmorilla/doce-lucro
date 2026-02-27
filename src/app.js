@@ -7,6 +7,106 @@ let state = normalizeState(loadState());
 let session = null;
 
 /* =========================================================
+   ✅ CLOUD SYNC (Supabase) — salva state por usuário
+   - resolve “não aparece em outro navegador”
+   - mantém offline (localStorage) funcionando
+========================================================= */
+let cloudUserId = null;
+let saveTimer = null;
+let lastSavedHash = "";
+
+function stableHash(obj) {
+  try {
+    return JSON.stringify(obj);
+  } catch {
+    return String(Date.now());
+  }
+}
+
+async function getUser() {
+  const { data, error } = await supabase.auth.getUser();
+  if (error) return null;
+  return data?.user || null;
+}
+
+async function bindAuthSync() {
+  const u = await getUser();
+  cloudUserId = u?.id || null;
+
+  supabase.auth.onAuthStateChange((_event, newSession) => {
+    cloudUserId = newSession?.user?.id || null;
+  });
+}
+
+async function loadStateFromCloud(localState) {
+  const u = await getUser();
+  if (!u) return { state: localState, source: "local(no-user)" };
+
+  cloudUserId = u.id;
+
+  const { data, error } = await supabase.from("user_state").select("data").eq("user_id", u.id).single();
+
+  // não existe ainda -> cria com local
+  if (error && (error.code === "PGRST116" || error.status === 406)) {
+    const { error: upErr } = await supabase.from("user_state").upsert({
+      user_id: u.id,
+      data: localState,
+      updated_at: new Date().toISOString(),
+    });
+    if (upErr) console.warn("Falha ao criar cloud state:", upErr);
+
+    lastSavedHash = stableHash(localState);
+    return { state: localState, source: "local->cloud(created)" };
+  }
+
+  if (error) {
+    console.warn("Falha ao carregar cloud state:", error);
+    return { state: localState, source: "local(load-error)" };
+  }
+
+  const cloudState = data?.data ?? {};
+  lastSavedHash = stableHash(cloudState);
+  return { state: cloudState, source: "cloud" };
+}
+
+function scheduleSaveToCloud(currentState, debounceMs = 700) {
+  if (!cloudUserId) return;
+
+  const h = stableHash(currentState);
+  if (h === lastSavedHash) return;
+
+  if (saveTimer) clearTimeout(saveTimer);
+  saveTimer = setTimeout(async () => {
+    const payload = {
+      user_id: cloudUserId,
+      data: currentState,
+      updated_at: new Date().toISOString(),
+    };
+
+    const { error } = await supabase.from("user_state").upsert(payload);
+    if (error) {
+      console.warn("Falha ao salvar cloud state:", error);
+      return;
+    }
+    lastSavedHash = h;
+  }, debounceMs);
+}
+
+async function applyCloudAfterLogin() {
+  const loaded = await loadStateFromCloud(state);
+  state = normalizeState(loaded.state);
+
+  // mantém o local igual ao cloud (e vice-versa)
+  saveState(state);
+
+  // aplica UI caso tenha mudado no cloud
+  setTheme(state.theme || "dark");
+  setBrand(state.storeName || "");
+  const btnTheme = qs("#btnTheme");
+  syncThemeIcon(btnTheme);
+}
+
+/* =========================================================
    CORE
 ========================================================= */
 async function mount() {
@@ -32,12 +132,24 @@ async function mount() {
     btn.addEventListener("click", () => navigate(btn.dataset.route));
   });
 
-  // ✅ Supabase: pega sessão atual
+  // ✅ Supabase: bind + pega sessão atual
+  await bindAuthSync();
   await refreshSession();
+
+  // ✅ se já estiver logado, carrega do cloud agora
+  if (session) {
+    await applyCloudAfterLogin();
+  }
 
   // Listener: mudanças de auth (login/logout)
   supabase.auth.onAuthStateChange(async (_event, newSession) => {
     session = newSession;
+
+    // ✅ se logou agora, puxa cloud e aplica
+    if (session) {
+      await applyCloudAfterLogin();
+    }
+
     render(state.route || "home");
   });
 
@@ -116,9 +228,22 @@ function normalizeState(s) {
   return merged;
 }
 
+/**
+ * ✅ Persistência local + cloud (quando logado)
+ * - Local sempre (offline)
+ * - Cloud se tiver session (sincroniza entre navegadores)
+ */
 function persist() {
   state = normalizeState(state);
+
+  // local
   saveState(state);
+
+  // cloud
+  if (session?.user?.id) {
+    cloudUserId = session.user.id;
+    scheduleSaveToCloud(state);
+  }
 }
 
 function syncThemeIcon(btnTheme) {
@@ -223,6 +348,10 @@ function renderSupabaseLogin(root) {
     if (error) return toast(error.message, "error");
 
     await refreshSession();
+
+    // ✅ puxa cloud imediatamente
+    await applyCloudAfterLogin();
+
     toast("Logado ✅", "success");
     render(state.route || "home");
   });
@@ -237,6 +366,10 @@ function renderSupabaseLogin(root) {
 
     toast("Conta criada ✅ (confirme no e-mail se necessário)", "success");
     await refreshSession();
+
+    // se já tiver sessão, aplica cloud
+    if (session) await applyCloudAfterLogin();
+
     render(state.route || "home");
   });
 
@@ -380,7 +513,6 @@ function renderHome(root) {
       </div>
 
       <div style="height:10px"></div>
-      <!-- ✅ ALTERAÇÃO: botão virou CTA danger premium -->
       <button class="btn btn--danger btn--cta-danger" id="btnCashOut" style="width:100%" type="button">➖ Registrar saída</button>
     </section>
 
@@ -598,12 +730,16 @@ function renderSale(root) {
 
       <div class="field mt-12">
         <div class="label">Desconto</div>
-        <input type="text" inputmode="decimal" class="input" id="inpDiscount" placeholder="0,00" value="${formatMoneyInput(desconto)}" />
+        <input type="text" inputmode="decimal" class="input" id="inpDiscount" placeholder="0,00" value="${formatMoneyInput(
+          desconto
+        )}" />
       </div>
 
       <div class="field mt-12">
         <div class="label">Acréscimo (entrega, etc)</div>
-        <input type="text" inputmode="decimal" class="input" id="inpExtra" placeholder="0,00" value="${formatMoneyInput(acrescimo)}" />
+        <input type="text" inputmode="decimal" class="input" id="inpExtra" placeholder="0,00" value="${formatMoneyInput(
+          acrescimo
+        )}" />
       </div>
 
       ${
@@ -611,7 +747,9 @@ function renderSale(root) {
           ? `
         <div class="field mt-12">
           <div class="label">Recebido em dinheiro</div>
-          <input type="text" inputmode="decimal" class="input" id="inpRecebido" placeholder="0,00" value="${formatMoneyInput(recebido)}" />
+          <input type="text" inputmode="decimal" class="input" id="inpRecebido" placeholder="0,00" value="${formatMoneyInput(
+            recebido
+          )}" />
         </div>
       `
           : ""
@@ -1342,12 +1480,12 @@ function showOrderModal(orderId, root) {
     const sinal = parseMoneyInput(container.querySelector("#inpSinal")?.value || "0");
     if (!sinal || sinal <= 0) return toast("Defina um valor de sinal maior que 0.", "error");
 
-    const metodoSinal = container.querySelector("#selMetodoSinal")?.value || "pix";
+    const metodoSinalX = container.querySelector("#selMetodoSinal")?.value || "pix";
 
     const current = state.orders[idx];
     if (current.sinalRegistrado === true) return toast("Sinal já foi registrado.", "info");
 
-    const tipo = metodoSinal === "dinheiro" ? "dinheiro" : metodoSinal === "cartao" ? "cartao" : "pix";
+    const tipo = metodoSinalX === "dinheiro" ? "dinheiro" : metodoSinalX === "cartao" ? "cartao" : "pix";
 
     state.cashMoves.push({
       id: newId(),
@@ -1361,7 +1499,7 @@ function showOrderModal(orderId, root) {
     state.orders[idx] = {
       ...current,
       sinal,
-      metodoSinal,
+      metodoSinal: metodoSinalX,
       sinalRegistrado: true,
     };
 
@@ -1377,16 +1515,16 @@ function showOrderModal(orderId, root) {
     const taxaEntrega = parseMoneyInput(container.querySelector("#inpTaxa")?.value || "0");
     const sinal = parseMoneyInput(container.querySelector("#inpSinal")?.value || "0");
     const status = container.querySelector("#selStatus")?.value || "aberta";
-    const metodoSinal = container.querySelector("#selMetodoSinal")?.value || "pix";
-    const metodoRestante = container.querySelector("#selMetodoRestante")?.value || "pix";
+    const metodoSinalX = container.querySelector("#selMetodoSinal")?.value || "pix";
+    const metodoRestanteX = container.querySelector("#selMetodoRestante")?.value || "pix";
 
     if (!cliente) return toast("Preencha o nome do cliente", "error");
     if (Object.keys(itemsById).length === 0) return toast("Adicione pelo menos um produto", "error");
 
-    const items = cartToItems(itemsById, products);
-    const subtotal = items.reduce((a, i) => a + i.qty * i.unitPrice, 0);
-    const totalCusto = items.reduce((a, i) => a + i.qty * i.unitCost, 0);
-    const total = subtotal + taxaEntrega;
+    const itemsX = cartToItems(itemsById, products);
+    const subtotalX = itemsX.reduce((a, i) => a + i.qty * i.unitPrice, 0);
+    const totalCustoX = itemsX.reduce((a, i) => a + i.qty * i.unitCost, 0);
+    const totalX = subtotalX + taxaEntrega;
 
     if (isEdit) {
       const idx = state.orders.findIndex((o) => o.id === orderId);
@@ -1401,12 +1539,12 @@ function showOrderModal(orderId, root) {
           sinal,
           status,
           itemsById,
-          items,
-          total,
-          totalCusto,
-          lucroEstimado: calcProfit(total, totalCusto, 0),
-          metodoSinal,
-          metodoRestante,
+          items: itemsX,
+          total: totalX,
+          totalCusto: totalCustoX,
+          lucroEstimado: calcProfit(totalX, totalCustoX, 0),
+          metodoSinal: metodoSinalX,
+          metodoRestante: metodoRestanteX,
           // mantém flags existentes
           sinalRegistrado: prev.sinalRegistrado === true,
           entregaRegistrada: prev.entregaRegistrada === true,
@@ -1424,12 +1562,12 @@ function showOrderModal(orderId, root) {
         taxaEntrega,
         sinal,
         itemsById,
-        items,
-        total,
-        totalCusto,
-        lucroEstimado: calcProfit(total, totalCusto, 0),
-        metodoSinal,
-        metodoRestante,
+        items: itemsX,
+        total: totalX,
+        totalCusto: totalCustoX,
+        lucroEstimado: calcProfit(totalX, totalCustoX, 0),
+        metodoSinal: metodoSinalX,
+        metodoRestante: metodoRestanteX,
         sinalRegistrado: false,
         entregaRegistrada: false,
       });
@@ -1580,18 +1718,24 @@ function showProductModal(productId, root) {
 
         <div class="field">
           <label class="label">Nome do produto</label>
-          <input type="text" class="input" id="inpNome" placeholder="Ex: Bolo no pote" value="${escapeHtml(product?.nome || "")}" />
+          <input type="text" class="input" id="inpNome" placeholder="Ex: Bolo no pote" value="${escapeHtml(
+            product?.nome || ""
+          )}" />
         </div>
 
         <div class="fieldgrid mt-12">
           <div class="field">
             <label class="label">Preço de venda</label>
-            <input type="text" inputmode="decimal" class="input" id="inpPreco" placeholder="0,00" value="${formatMoneyInput(product?.preco || 0)}" />
+            <input type="text" inputmode="decimal" class="input" id="inpPreco" placeholder="0,00" value="${formatMoneyInput(
+              product?.preco || 0
+            )}" />
           </div>
 
           <div class="field">
             <label class="label">Custo unitário</label>
-            <input type="text" inputmode="decimal" class="input" id="inpCusto" placeholder="0,00" value="${formatMoneyInput(product?.custo || 0)}" />
+            <input type="text" inputmode="decimal" class="input" id="inpCusto" placeholder="0,00" value="${formatMoneyInput(
+              product?.custo || 0
+            )}" />
           </div>
         </div>
 
@@ -1787,7 +1931,9 @@ function renderMore(root) {
 
       <div class="field">
         <label class="label">Nome da confeitaria</label>
-        <input type="text" class="input" id="inpStoreName" placeholder="Ex: Doces da Ana" value="${escapeHtml(state.storeName || "")}" />
+        <input type="text" class="input" id="inpStoreName" placeholder="Ex: Doces da Ana" value="${escapeHtml(
+          state.storeName || ""
+        )}" />
       </div>
 
       <div style="height:10px"></div>
@@ -2167,7 +2313,11 @@ function renderWeekTable(week) {
       <tbody>
         ${week
           .map((d) => {
-            const label = new Date(d.date).toLocaleDateString("pt-BR", { weekday: "short", month: "2-digit", day: "2-digit" });
+            const label = new Date(d.date).toLocaleDateString("pt-BR", {
+              weekday: "short",
+              month: "2-digit",
+              day: "2-digit",
+            });
             return `
             <tr>
               <td>${escapeHtml(label)}</td>
