@@ -50,11 +50,12 @@ async function loadStateFromCloud(localState) {
 
   // Se ainda não existir registro → cria
   if (error && (error.code === "PGRST116" || error.status === 406)) {
-    await supabase.from("user_state").upsert({
-      user_id: u.id,
-      data: localState,
-      updated_at: new Date().toISOString(),
-    });
+    await supabase
+  .from("user_state")
+  .upsert(
+    { user_id: cloudUserId, data: currentState, updated_at: new Date().toISOString() },
+    { onConflict: "user_id" }
+  );
 
     lastSavedHash = stableHash(localState);
     return { state: localState };
@@ -80,11 +81,12 @@ function scheduleSaveToCloud(currentState, debounceMs = 700) {
   if (saveTimer) clearTimeout(saveTimer);
 
   saveTimer = setTimeout(async () => {
-    const { error } = await supabase.from("user_state").upsert({
-      user_id: cloudUserId,
-      data: currentState,
-      updated_at: new Date().toISOString(),
-    });
+    const { error } = await supabase
+    .from("user_state")
+    .upsert(
+      { user_id: cloudUserId, data: currentState, updated_at: new Date().toISOString() },
+      { onConflict: "user_id" }
+    );
 
     if (error) {
       console.warn("Erro ao salvar cloud state:", error);
@@ -174,6 +176,7 @@ async function refreshSession() {
   try {
     const { data } = await supabase.auth.getSession();
     session = data?.session || null;
+    cloudUserId = session?.user?.id || cloudUserId || null; // ✅ ADD
   } catch {
     session = null;
   }
@@ -247,13 +250,12 @@ function normalizeState(s) {
 function persist() {
   state = normalizeState(state);
 
-  // local
+  // local sempre
   saveState(state);
 
-  // cloud
-  if (session?.user?.id) {
-    cloudUserId = session.user.id;
-    scheduleSaveToCloud(700);
+  // ✅ cloud: usa cloudUserId (mais confiável que session)
+  if (cloudUserId) {
+    scheduleSaveToCloud(state);
   }
 }
 
