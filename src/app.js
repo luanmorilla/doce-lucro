@@ -7,13 +7,11 @@ let state = normalizeState(loadState());
 let session = null;
 
 /* =========================================================
-   ✅ CLOUD SYNC (Supabase) — salva state por usuário (ROBUSTO)
+   ✅ CLOUD SYNC (Supabase) — salva state por usuário
    - resolve “não aparece em outro navegador”
    - mantém offline (localStorage) funcionando
 ========================================================= */
-const CLOUD_TABLE = "user_state";
 let cloudUserId = null;
-let cloudPulling = false;
 let saveTimer = null;
 let lastSavedHash = "";
 
@@ -25,102 +23,102 @@ function stableHash(obj) {
   }
 }
 
-function stripStateForCloud(s) {
-  // salva o state inteiro (do jeito que você está usando)
-  // (se no futuro quiser remover coisas temporárias, faça aqui)
-  return JSON.parse(JSON.stringify(s || {}));
+async function getUser() {
+  const { data, error } = await supabase.auth.getUser();
+  if (error) return null;
+  return data?.user || null;
 }
 
-function getUserId() {
-  return session?.user?.id || null;
+async function bindAuthSync() {
+  const u = await getUser();
+  cloudUserId = u?.id || null;
+
+  supabase.auth.onAuthStateChange((_event, newSession) => {
+    cloudUserId = newSession?.user?.id || null;
+  });
 }
 
-async function pullCloudState() {
-  const uid = getUserId();
-  if (!uid) return null;
+async function loadStateFromCloud(localState) {
+  const u = await getUser();
+  if (!u) return { state: localState, source: "local(no-user)" };
 
-  // ✅ maybeSingle: não quebra quando não existe linha
+  cloudUserId = u.id;
+
+  // ✅ coluna certa: "dados"
   const { data, error } = await supabase
-    .from(CLOUD_TABLE)
-    .select("data")
-    .eq("user_id", uid)
-    .maybeSingle();
+    .from("user_state")
+    .select("dados")
+    .eq("user_id", u.id)
+    .single();
 
-  if (error) {
-    console.warn("pullCloudState error:", error);
-    return null;
+  // não existe ainda -> cria com local
+  if (error && (error.code === "PGRST116" || error.status === 406)) {
+    const { error: upErr } = await supabase.from("user_state").upsert({
+      user_id: u.id,
+      // ✅ coluna certa: "dados"
+      dados: localState,
+      // ✅ coluna certa: "atualizado_em"
+      atualizado_em: new Date().toISOString(),
+    });
+
+    if (upErr) console.warn("Falha ao criar cloud state:", upErr);
+
+    lastSavedHash = stableHash(localState);
+    return { state: localState, source: "local->cloud(created)" };
   }
 
-  return data?.data ?? null;
-}
-
-async function pushCloudStateNow() {
-  const uid = getUserId();
-  if (!uid) return;
-
-  const payload = {
-    user_id: uid,
-    data: stripStateForCloud(state),
-    // updated_at pode existir na tabela; se não existir, não tem problema no Supabase (mas se existir, ok)
-    updated_at: new Date().toISOString(),
-  };
-
-  const { error } = await supabase
-    .from(CLOUD_TABLE)
-    .upsert(payload, { onConflict: "user_id" });
-
   if (error) {
-    console.warn("pushCloudState error:", error);
-    return;
+    console.warn("Falha ao carregar cloud state:", error);
+    return { state: localState, source: "local(load-error)" };
   }
 
-  lastSavedHash = stableHash(payload.data);
+  // ✅ lê do campo certo
+  const cloudState = data?.dados ?? {};
+  lastSavedHash = stableHash(cloudState);
+  return { state: cloudState, source: "cloud" };
 }
 
-function scheduleSaveToCloud(debounceMs = 700) {
-  if (!getUserId()) return;
-  if (cloudPulling) return;
+function scheduleSaveToCloud(currentState, debounceMs = 700) {
+  if (!cloudUserId) return;
 
-  const h = stableHash(state);
+  const h = stableHash(currentState);
   if (h === lastSavedHash) return;
 
   if (saveTimer) clearTimeout(saveTimer);
+
   saveTimer = setTimeout(async () => {
-    await pushCloudStateNow();
+    const payload = {
+      user_id: cloudUserId,
+      // ✅ coluna certa
+      dados: currentState,
+      // ✅ coluna certa
+      atualizado_em: new Date().toISOString(),
+    };
+
+    const { error } = await supabase.from("user_state").upsert(payload);
+
+    if (error) {
+      console.warn("Falha ao salvar cloud state:", error);
+      return;
+    }
+
+    lastSavedHash = h;
   }, debounceMs);
 }
 
 async function applyCloudAfterLogin() {
-  if (!getUserId()) return;
+  const loaded = await loadStateFromCloud(state);
+  state = normalizeState(loaded.state);
 
-  cloudPulling = true;
-  try {
-    const cloud = await pullCloudState();
+  // mantém o local igual ao cloud (e vice-versa)
+  saveState(state);
 
-    // não existe no banco ainda => cria com o local atual
-    if (!cloud) {
-      await pushCloudStateNow();
-      return;
-    }
-
-    // cloud vira fonte da verdade
-    state = normalizeState(cloud);
-
-    // mantém local igual ao cloud (abre rápido offline)
-    saveState(state);
-
-    // aplica UI
-    setTheme(state.theme || "dark");
-    setBrand(state.storeName || "");
-    const btnTheme = qs("#btnTheme");
-    syncThemeIcon(btnTheme);
-
-    lastSavedHash = stableHash(state);
-  } finally {
-    cloudPulling = false;
-  }
+  // aplica UI caso tenha mudado no cloud
+  setTheme(state.theme || "dark");
+  setBrand(state.storeName || "");
+  const btnTheme = qs("#btnTheme");
+  syncThemeIcon(btnTheme);
 }
-
 /* =========================================================
    CORE
 ========================================================= */
