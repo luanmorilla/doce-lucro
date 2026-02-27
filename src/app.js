@@ -8,8 +8,6 @@ let session = null;
 
 /* =========================================================
    ✅ CLOUD SYNC (Supabase) — salva state por usuário
-   - resolve “não aparece em outro navegador”
-   - mantém offline (localStorage) funcionando
 ========================================================= */
 let cloudUserId = null;
 let saveTimer = null;
@@ -40,42 +38,37 @@ async function bindAuthSync() {
 
 async function loadStateFromCloud(localState) {
   const u = await getUser();
-  if (!u) return { state: localState, source: "local(no-user)" };
+  if (!u) return { state: localState };
 
   cloudUserId = u.id;
 
-  // ✅ coluna certa: "dados"
   const { data, error } = await supabase
     .from("user_state")
-    .select("dados")
+    .select("data")
     .eq("user_id", u.id)
     .single();
 
-  // não existe ainda -> cria com local
+  // Se ainda não existir registro → cria
   if (error && (error.code === "PGRST116" || error.status === 406)) {
-    const { error: upErr } = await supabase.from("user_state").upsert({
+    await supabase.from("user_state").upsert({
       user_id: u.id,
-      // ✅ coluna certa: "dados"
-      dados: localState,
-      // ✅ coluna certa: "atualizado_em"
-      atualizado_em: new Date().toISOString(),
+      data: localState,
+      updated_at: new Date().toISOString(),
     });
 
-    if (upErr) console.warn("Falha ao criar cloud state:", upErr);
-
     lastSavedHash = stableHash(localState);
-    return { state: localState, source: "local->cloud(created)" };
+    return { state: localState };
   }
 
   if (error) {
-    console.warn("Falha ao carregar cloud state:", error);
-    return { state: localState, source: "local(load-error)" };
+    console.warn("Erro ao carregar cloud state:", error);
+    return { state: localState };
   }
 
-  // ✅ lê do campo certo
-  const cloudState = data?.dados ?? {};
+  const cloudState = data?.data ?? {};
   lastSavedHash = stableHash(cloudState);
-  return { state: cloudState, source: "cloud" };
+
+  return { state: cloudState };
 }
 
 function scheduleSaveToCloud(currentState, debounceMs = 700) {
@@ -87,23 +80,28 @@ function scheduleSaveToCloud(currentState, debounceMs = 700) {
   if (saveTimer) clearTimeout(saveTimer);
 
   saveTimer = setTimeout(async () => {
-    const payload = {
+    const { error } = await supabase.from("user_state").upsert({
       user_id: cloudUserId,
-      // ✅ coluna certa
-      dados: currentState,
-      // ✅ coluna certa
-      atualizado_em: new Date().toISOString(),
-    };
-
-    const { error } = await supabase.from("user_state").upsert(payload);
+      data: currentState,
+      updated_at: new Date().toISOString(),
+    });
 
     if (error) {
-      console.warn("Falha ao salvar cloud state:", error);
+      console.warn("Erro ao salvar cloud state:", error);
       return;
     }
 
     lastSavedHash = h;
   }, debounceMs);
+}
+
+async function applyCloudAfterLogin() {
+  const loaded = await loadStateFromCloud(state);
+  state = normalizeState(loaded.state);
+
+  saveState(state);
+  setTheme(state.theme || "dark");
+  setBrand(state.storeName || "");
 }
 
 async function applyCloudAfterLogin() {
