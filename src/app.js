@@ -255,24 +255,15 @@ async function mount() {
   }
 
   // ✅ Listener ÚNICO: mudanças de auth (login/logout)
-  supabase.auth.onAuthStateChange(async (_event, newSession) => {
-    session = newSession;
-    cloudUserId = getUserId();
-
-    if (session) {
-      await applyCloudAfterLogin();
-    } else {
-      // logout: mantém local, só desliga cloud
-      cloudUserId = null;
-    }
-
-    render(state.route || "home");
-  });
+  
 
   const hashRoute = (location.hash || "").replace("#", "").trim();
-  navigate(hashRoute || state.route || "home", true);
+navigate(hashRoute || state.route || "home", true);
 
-  registerSW();
+// ✅ ativa UX global de dinheiro (0,00 some ao focar)
+bindGlobalMoneyUX();
+
+registerSW();
 }
 
 function normalizeState(s) {
@@ -444,12 +435,50 @@ function renderSupabaseLogin(root) {
 
       <div style="height:10px"></div>
       <div class="muted" style="font-size:12px">
-        Dica: se seu projeto estiver com confirmação por e-mail ativada, você vai precisar confirmar no e-mail ao criar conta.
+        Dica: se a confirmação por e-mail estiver ativada no Supabase, você precisa confirmar no e-mail ao criar conta.
       </div>
     </section>
   `;
 
   root.innerHTML = html;
+
+  const getCreds = () => {
+    const email = (qs("#authEmail")?.value || "").trim();
+    const password = (qs("#authPass")?.value || "").trim();
+    return { email, password };
+  };
+
+  qs("#btnLogin")?.addEventListener("click", async () => {
+    const { email, password } = getCreds();
+    if (!email || !password) return toast("Preencha e-mail e senha", "error");
+
+    const ok = await doLogin(email, password);
+    if (!ok) return;
+
+    toast("Logado ✅", "success");
+    render(state.route || "home");
+  });
+
+  qs("#btnSignup")?.addEventListener("click", async () => {
+    const { email, password } = getCreds();
+    if (!email || !password) return toast("Preencha e-mail e senha", "error");
+
+    const ok = await doSignup(email, password);
+    if (!ok) return;
+
+    toast("Conta criada e logada ✅", "success");
+    render(state.route || "home");
+  });
+
+  qs("#btnForgot")?.addEventListener("click", async () => {
+    const email = (qs("#authEmail")?.value || "").trim();
+    if (!email) return toast("Digite seu e-mail", "error");
+
+    const { error } = await supabase.auth.resetPasswordForEmail(email);
+    if (error) return toast(error.message, "error");
+    toast("Link de recuperação enviado ✅", "success");
+  });
+}
 
   qs("#btnLogin")?.addEventListener("click", async () => {
     const email = (qs("#authEmail")?.value || "").trim();
@@ -493,7 +522,7 @@ function renderSupabaseLogin(root) {
     if (error) return toast(error.message, "error");
     toast("Link de recuperação enviado ✅", "success");
   });
-}
+
 
 /* =========================================================
    PIN LOCK SCREEN (opcional)
@@ -2204,8 +2233,13 @@ function renderMore(root) {
 }
 
 /* =========================================================
+   /* =========================================================
    HELPERS
 ========================================================= */
+
+// ---------------------------------
+// Draft helpers (encomendas)
+// ---------------------------------
 function draftKeyForOrder(orderId) {
   return orderId ? `edit:${orderId}` : "new";
 }
@@ -2247,7 +2281,11 @@ function clearOrderDraft(orderId) {
   persist();
 }
 
-// ✅ UX: ao focar em campos de dinheiro, se for "0,00" limpa; senão seleciona tudo
+// ---------------------------------
+// Money UX helpers
+// ---------------------------------
+
+// ✅ UX: ao focar em campos de dinheiro por ID, se for "0,00" limpa; senão seleciona tudo
 function bindMoneyInputClearOnFocus(root, ids = []) {
   ids.forEach((id) => {
     const el = root.querySelector(`#${id}`);
@@ -2256,14 +2294,73 @@ function bindMoneyInputClearOnFocus(root, ids = []) {
     el.addEventListener("focus", () => {
       const raw = String(el.value || "").trim();
       const v = parseMoneyInput(raw);
-      if (!raw || v === 0) {
+
+      // limpa 0 / 0,00 / vazio
+      if (!raw || raw === "0" || raw === "0,0" || raw === "0,00" || v === 0) {
         el.value = "";
         return;
       }
+
+      // se tem valor, seleciona tudo
       try {
         el.select();
       } catch {}
     });
+
+    // se sair e ficar vazio, volta 0,00
+    el.addEventListener("blur", () => {
+      const raw = String(el.value || "").trim();
+      if (!raw) el.value = "0,00";
+    });
+  });
+}
+
+/* =========================================================
+   ✅ UX GLOBAL — 0,00 some ao clicar em QUALQUER campo de dinheiro
+   - pega inputs com inputmode="decimal" ou placeholder "0,00" ou type="number"
+   - não precisa passar IDs
+   - evita registrar 2 vezes
+========================================================= */
+function bindGlobalMoneyUX() {
+  const isMoneyInput = (el) => {
+    if (!(el instanceof HTMLInputElement)) return false;
+
+    const inputmode = (el.getAttribute("inputmode") || "").toLowerCase();
+    const placeholder = String(el.getAttribute("placeholder") || "").trim();
+    const type = (el.getAttribute("type") || "").toLowerCase();
+
+    return inputmode === "decimal" || placeholder === "0,00" || type === "number";
+  };
+
+  // ✅ evita duplicar
+  if (window.__dlMoneyUXBound) return;
+  window.__dlMoneyUXBound = true;
+
+  // ao focar: limpa zero; se não for zero, seleciona tudo
+  document.addEventListener("focusin", (e) => {
+    const el = e.target;
+    if (!isMoneyInput(el)) return;
+
+    const raw = String(el.value || "").trim();
+    const v = parseMoneyInput(raw);
+
+    if (!raw || raw === "0" || raw === "0,0" || raw === "0,00" || v === 0) {
+      el.value = "";
+      return;
+    }
+
+    try {
+      el.select();
+    } catch {}
+  });
+
+  // ao sair: se ficou vazio, volta 0,00
+  document.addEventListener("focusout", (e) => {
+    const el = e.target;
+    if (!isMoneyInput(el)) return;
+
+    const raw = String(el.value || "").trim();
+    if (!raw) el.value = "0,00";
   });
 }
 
