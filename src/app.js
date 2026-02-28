@@ -5,7 +5,29 @@ import { supabase } from "./supabase.js";
 
 let state = normalizeState(loadState());
 let session = null;
+// =========================================================
+// ✅ AUTH/SESSION GLOBALS (FIX)
+// =========================================================
+let cloudUserId = null;
 
+// sempre retorna o userId atual (session ou cloud)
+function getUserId() {
+  return session?.user?.id || cloudUserId || null;
+}
+
+// atualiza a sessão do Supabase (necessário pro login sair da tela)
+async function refreshSession() {
+  try {
+    const { data, error } = await supabase.auth.getSession();
+    if (error) throw error;
+
+    session = data?.session || null;
+    cloudUserId = session?.user?.id || null;
+  } catch (e) {
+    session = null;
+    cloudUserId = null;
+  }
+}
 /* =========================================================
    ✅ AUTH FLOW — entra e sai da tela de login
    - mostra erro via alert
