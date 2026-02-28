@@ -7,99 +7,125 @@ let state = normalizeState(loadState());
 let session = null;
 
 /* =========================================================
-   ✅ CLOUD SYNC (Supabase) — robusto, sem duplicações
-   - Carrega do cloud ao logar
-   - Salva no cloud com debounce
-   - Resolve conflito via updated_at (usa __updatedAt local)
-   - Nunca “zera” seu app se o cloud vier vazio
+   ✅ AUTH FLOW — entra e sai da tela de login
+   - mostra erro via alert
+   - atualiza session/cloudUserId
+   - chama applyCloudAfterLogin()
 ========================================================= */
-let cloudUserId = null;
 
-let saveTimer = null;
-let lastSavedHash = "";
-let isApplyingCloud = false; // evita loop (carrega -> persist -> salva)
-
-function stableHash(obj) {
-  try {
-    return JSON.stringify(obj);
-  } catch {
-    return String(Date.now());
-  }
+// 🔧 Ajuste essas funções para as suas telas/rotas:
+function showLogin() {
+  // EXEMPLO: se você usa uma section/página de login
+  // qs("#pageLogin")?.classList.remove("hidden");
+  // qs("#pageApp")?.classList.add("hidden");
 }
 
-async function refreshSession() {
-  try {
-    const { data, error } = await supabase.auth.getSession();
-    if (error) throw error;
-    session = data?.session || null;
-    cloudUserId = session?.user?.id || null;
-  } catch {
-    session = null;
-    cloudUserId = null;
-  }
+function showApp() {
+  // EXEMPLO:
+  // qs("#pageLogin")?.classList.add("hidden");
+  // qs("#pageApp")?.classList.remove("hidden");
 }
 
-async function getUser() {
-  // garante que session/cloudUserId estão atualizados
+async function enterAppAfterAuth() {
+  // garante session atualizada
   await refreshSession();
 
+  if (!session?.user) {
+    // sem sessão, mantém login
+    showLogin();
+    return;
+  }
+
+  // aplica cloud + UI
+  await applyCloudAfterLogin();
+
+  // ✅ aqui você manda o app ir pra home.
+  // Se você tem navigate():
   try {
-    const { data, error } = await supabase.auth.getUser();
-    if (error) return null;
-    return data?.user || null;
-  } catch {
-    return null;
+    showApp();
+    if (typeof navigate === "function") navigate("inicio", true);
+    // se você não tem navigate, chama seu render/mount:
+    else if (typeof mount === "function") mount();
+  } catch (e) {
+    console.warn("Falha ao entrar no app:", e);
+    showApp();
   }
 }
 
-function getLocalUpdatedAt(s) {
-  const t = s?.__updatedAt;
-  const ms = t ? new Date(t).getTime() : 0;
-  return Number.isFinite(ms) ? ms : 0;
-}
-
-function stampLocalUpdatedAt(s) {
-  s.__updatedAt = new Date().toISOString();
-  return s;
-}
-
-function mergePreferNewer(localState, cloudState) {
-  // Se cloud vier vazio/sem estrutura, não destrói local
-  const cloudOk =
-    cloudState &&
-    typeof cloudState === "object" &&
-    (cloudState.products || cloudState.sales || cloudState.orders || cloudState.cashMoves);
-
-  if (!cloudOk) return localState;
-
-  // Preferir o que for “mais novo”
-  const l = getLocalUpdatedAt(localState);
-  const c = getLocalUpdatedAt(cloudState);
-  return c > l ? cloudState : localState;
-}
-
-async function ensureCloudRow(userId, seedState) {
+async function doLogin(email, password) {
   try {
-    const { data: existing, error: selErr } = await supabase
-      .from("user_state")
-      .select("user_id")
-      .eq("user_id", userId)
-      .maybeSingle();
+    const { data, error } = await supabase.auth.signInWithPassword({
+      email,
+      password,
+    });
+    if (error) throw error;
 
-    if (selErr) return;
+    // atualiza sessão e entra
+    session = data?.session || null;
+    cloudUserId = session?.user?.id || null;
 
-    if (!existing) {
-      const payload = stampLocalUpdatedAt(normalizeState(seedState));
-      await supabase.from("user_state").insert({
-        user_id: userId,
-        data: payload,
-        updated_at: new Date().toISOString(),
-      });
+    await enterAppAfterAuth();
+    return true;
+  } catch (err) {
+    console.error("ERRO LOGIN:", err);
+    alert(err?.message || "Erro ao fazer login");
+    return false;
+  }
+}
+
+async function doSignup(email, password) {
+  try {
+    const { data, error } = await supabase.auth.signUp({
+      email,
+      password,
+    });
+    if (error) throw error;
+
+    // ⚠️ Se confirmação de e-mail estiver ativa, NÃO vem session aqui.
+    if (!data?.session) {
+      alert("Conta criada! Agora confirme o e-mail para conseguir entrar.");
+      return false;
     }
-  } catch {
-    // Se falhar (RLS, tabela, etc), local continua funcionando
+
+    session = data.session;
+    cloudUserId = session?.user?.id || null;
+
+    await enterAppAfterAuth();
+    return true;
+  } catch (err) {
+    console.error("ERRO SIGNUP:", err);
+    alert(err?.message || "Erro ao criar conta");
+    return false;
   }
 }
+
+/* =========================================================
+   ✅ LISTENER GLOBAL — garante troca automática de tela
+========================================================= */
+supabase.auth.onAuthStateChange(async (event, sess) => {
+  console.log("AUTH EVENT:", event);
+
+  session = sess || null;
+  cloudUserId = session?.user?.id || null;
+
+  if (session?.user) {
+    await enterAppAfterAuth();
+  } else {
+    showLogin();
+  }
+});
+
+/* =========================================================
+   ✅ BOOT — quando abrir o app, decide login x app
+========================================================= */
+(async () => {
+  await refreshSession();
+  if (session?.user) {
+    await enterAppAfterAuth();
+  } else {
+    showLogin();
+  }
+})();
 
 async function loadStateFromCloud(localState) {
   const u = await getUser();
