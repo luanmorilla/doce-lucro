@@ -1,29 +1,26 @@
 /* =========================================================
-   SERVICE WORKER — PWA OFFLINE SUPPORT (Doce Lucro)
+   SERVICE WORKER — Doce Lucro (PWA Offline / Updates Safe)
    - App Shell precache
    - Navigation fallback to index.html
-   - Network-first for critical files (updates)
+   - Network-first for critical files (avoid stale app)
    - Cache-first for static assets
-   - Safer updates via version bump
-   ✅ Fix: suporta URLs com query (?v=1) via ignoreSearch
+   - Safer update flow: VERSION bump + SKIP_WAITING message
+   ✅ Works with ?v=1 (ignoreSearch)
+   ✅ Vercel-safe: evita cache de redirects/404
 ========================================================= */
 
-const VERSION = "v1.0.2"; // ✅ BUMP SEMPRE que publicar update
-const PRECACHE = `doce-lucro-precache-${VERSION}`;
-const RUNTIME = `doce-lucro-runtime-${VERSION}`;
+const VERSION = "v1.0.3"; // ✅ BUMP SEMPRE que publicar update
+const PREFIX = "doce-lucro";
+const PRECACHE = `${PREFIX}-precache-${VERSION}`;
+const RUNTIME = `${PREFIX}-runtime-${VERSION}`;
 
-/**
- * Monta URL absoluta respeitando o escopo (subpasta, preview etc.)
- */
+/** URL absoluta respeitando o scope (subpasta, preview, vercel) */
 function u(path) {
   return new URL(path, self.registration.scope).toString();
 }
 
-/**
- * App Shell (o essencial para o app abrir offline)
- * ✅ Inclui variações com query, pois seu index usa styles.css?v=1
- */
-const PRECACHE_URLS = [
+/** App Shell (essencial pro app abrir offline) */
+const APP_SHELL = [
   u("./"),
   u("./index.html"),
 
@@ -40,18 +37,18 @@ const PRECACHE_URLS = [
 
   // Manifest
   u("./manifest.webmanifest"),
-
-  // ✅ se existir mesmo, descomente:
-  // u("./assets/icons/icon-192.png"),
 ];
 
-/* Install: precache app shell */
+/* ---------------------------
+   INSTALL: precache shell
+--------------------------- */
 self.addEventListener("install", (event) => {
   event.waitUntil(
     (async () => {
       const cache = await caches.open(PRECACHE);
 
-      for (const url of PRECACHE_URLS) {
+      // addAll falha inteiro se 1 falhar; então fazemos add individual
+      for (const url of APP_SHELL) {
         try {
           await cache.add(url);
         } catch (e) {
@@ -59,37 +56,49 @@ self.addEventListener("install", (event) => {
         }
       }
 
-      // ativa assim que instala
       await self.skipWaiting();
     })()
   );
 });
 
-/* Activate: limpa caches antigos */
+/* ---------------------------
+   ACTIVATE: clean + claim + nav preload
+--------------------------- */
 self.addEventListener("activate", (event) => {
   event.waitUntil(
     (async () => {
+      // 🔒 Limpa apenas caches do Doce Lucro (não mexe em outros)
       const keys = await caches.keys();
-      await Promise.all(keys.map((key) => (key !== PRECACHE && key !== RUNTIME ? caches.delete(key) : undefined)));
+      await Promise.all(
+        keys.map((key) => {
+          const isOurs = key.startsWith(`${PREFIX}-`);
+          const keep = key === PRECACHE || key === RUNTIME;
+          return isOurs && !keep ? caches.delete(key) : undefined;
+        })
+      );
+
+      // ✅ Navigation preload (acelera network-first)
+      if (self.registration.navigationPreload) {
+        try {
+          await self.registration.navigationPreload.enable();
+        } catch {}
+      }
 
       await self.clients.claim();
     })()
   );
 });
 
-/**
- * ✅ Permite forçar update do SW via postMessage:
- * navigator.serviceWorker.controller?.postMessage({ type: "SKIP_WAITING" })
- */
+/* ---------------------------
+   MESSAGE: force update
+--------------------------- */
 self.addEventListener("message", (event) => {
-  if (event?.data?.type === "SKIP_WAITING") {
-    self.skipWaiting();
-  }
+  if (event?.data?.type === "SKIP_WAITING") self.skipWaiting();
 });
 
-/**
- * Helpers
- */
+/* ---------------------------
+   HELPERS
+--------------------------- */
 function isNavigationRequest(request) {
   return request.mode === "navigate" || (request.headers.get("accept") || "").includes("text/html");
 }
@@ -105,13 +114,15 @@ function isStaticAsset(url) {
     p.endsWith(".jpeg") ||
     p.endsWith(".webp") ||
     p.endsWith(".svg") ||
-    p.endsWith(".ico")
+    p.endsWith(".ico") ||
+    p.endsWith(".woff") ||
+    p.endsWith(".woff2")
   );
 }
 
 /**
- * ✅ Arquivos críticos: sempre tentar pegar o mais novo (network-first)
- * Observação: usa pathname (ignora query), então funciona com ?v=1
+ * Arquivos críticos: sempre tentar pegar o mais novo (network-first).
+ * Usa pathname -> funciona com ?v=1
  */
 function isCritical(url) {
   const p = url.pathname;
@@ -128,71 +139,81 @@ function isCritical(url) {
   );
 }
 
-/**
- * ✅ Cache match que suporta query (?v=1) e diferentes versões de URL
- */
+/** Cache match que suporta query (?v=1) */
 async function matchAny(requestOrUrl) {
-  // 1) tenta match exato
   const exact = await caches.match(requestOrUrl);
   if (exact) return exact;
 
-  // 2) tenta ignorar query string
   const ignore = await caches.match(requestOrUrl, { ignoreSearch: true });
   if (ignore) return ignore;
 
   return null;
 }
 
-/* Fetch */
+/**
+ * Cache PUT seguro:
+ * - só guarda responses OK (200-299)
+ * - evita cache de redirects (muito comum em deploy/rotas na Vercel)
+ * - evita opaque/cross-origin
+ */
+async function cachePutSafe(cacheName, request, response) {
+  try {
+    if (!response) return;
+
+    // só cacheia OK
+    if (!(response.status >= 200 && response.status < 300)) return;
+
+    // evita cache de redirect (pode “prender” versão errada)
+    if (response.redirected) return;
+
+    // não cachear opaque
+    if (response.type === "opaque") return;
+
+    const cache = await caches.open(cacheName);
+    await cache.put(request, response.clone());
+  } catch {}
+}
+
+/* ---------------------------
+   FETCH
+--------------------------- */
 self.addEventListener("fetch", (event) => {
   const { request } = event;
   if (request.method !== "GET") return;
 
   const url = new URL(request.url);
 
+  // Só intercepta requests dentro do scope (mesmo origin + path do scope)
   const scopeUrl = new URL(self.registration.scope);
   const inScope = url.origin === scopeUrl.origin && url.pathname.startsWith(scopeUrl.pathname);
   if (!inScope) return;
 
-  // ✅ Navegação: network-first + fallback index.html (ignora query)
+  // ✅ NAVIGATION: network-first + fallback index.html
   if (isNavigationRequest(request)) {
     event.respondWith(
       (async () => {
         try {
+          const preloaded = await event.preloadResponse;
+          if (preloaded) {
+            await cachePutSafe(RUNTIME, request, preloaded);
+            return preloaded;
+          }
+
           const fresh = await fetch(request, { cache: "no-store" });
-          const cache = await caches.open(RUNTIME);
-          cache.put(request, fresh.clone());
+          await cachePutSafe(RUNTIME, request, fresh);
           return fresh;
         } catch (_) {
+          // tenta cache do próprio request
           const cachedNav = await matchAny(request);
           if (cachedNav) return cachedNav;
 
+          // fallback pro shell (index.html), ignorando query
           const cachedShell = await matchAny(u("./index.html"));
           if (cachedShell) return cachedShell;
 
-          return new Response("Offline", { status: 503, headers: { "Content-Type": "text/plain" } });
-        }
-      })()
-    );
-    return;
-  }
-
-  // ✅ Críticos: network-first (pra não travar em versão velha)
-  if (isCritical(url)) {
-    event.respondWith(
-      (async () => {
-        try {
-          const fresh = await fetch(request, { cache: "no-store" });
-          const cache = await caches.open(RUNTIME);
-          cache.put(request, fresh.clone());
-          return fresh;
-        } catch (_) {
-          const cached = await matchAny(request);
-          if (cached) return cached;
-
-          return new Response("Offline - arquivo crítico não disponível", {
+          return new Response("Offline", {
             status: 503,
-            headers: { "Content-Type": "text/plain" },
+            headers: { "Content-Type": "text/plain; charset=utf-8" },
           });
         }
       })()
@@ -200,7 +221,35 @@ self.addEventListener("fetch", (event) => {
     return;
   }
 
-  // ✅ Assets estáticos: cache-first (com suporte a ?v=1)
+  // ✅ CRITICAL: network-first (não ficar preso em versão antiga)
+  if (isCritical(url)) {
+    event.respondWith(
+      (async () => {
+        try {
+          const preloaded = await event.preloadResponse;
+          if (preloaded) {
+            await cachePutSafe(RUNTIME, request, preloaded);
+            return preloaded;
+          }
+
+          const fresh = await fetch(request, { cache: "no-store" });
+          await cachePutSafe(RUNTIME, request, fresh);
+          return fresh;
+        } catch (_) {
+          const cached = await matchAny(request);
+          if (cached) return cached;
+
+          return new Response("Offline - arquivo crítico não disponível", {
+            status: 503,
+            headers: { "Content-Type": "text/plain; charset=utf-8" },
+          });
+        }
+      })()
+    );
+    return;
+  }
+
+  // ✅ STATIC ASSETS: cache-first (+ ignoreSearch)
   if (isStaticAsset(url)) {
     event.respondWith(
       (async () => {
@@ -209,13 +258,12 @@ self.addEventListener("fetch", (event) => {
 
         try {
           const fresh = await fetch(request);
-          const cache = await caches.open(RUNTIME);
-          cache.put(request, fresh.clone());
+          await cachePutSafe(RUNTIME, request, fresh);
           return fresh;
         } catch (_) {
           return new Response("Offline - asset não disponível", {
             status: 503,
-            headers: { "Content-Type": "text/plain" },
+            headers: { "Content-Type": "text/plain; charset=utf-8" },
           });
         }
       })()
@@ -223,20 +271,26 @@ self.addEventListener("fetch", (event) => {
     return;
   }
 
-  // Outros GETs: stale-while-revalidate simples
+  // ✅ OTHER GETs: stale-while-revalidate
   event.respondWith(
     (async () => {
       const cached = await matchAny(request);
 
-      const fetchPromise = fetch(request)
-        .then(async (fresh) => {
-          const cache = await caches.open(RUNTIME);
-          cache.put(request, fresh.clone());
+      const fetchPromise = (async () => {
+        try {
+          const fresh = await fetch(request);
+          await cachePutSafe(RUNTIME, request, fresh);
           return fresh;
-        })
-        .catch(() => null);
+        } catch {
+          return null;
+        }
+      })();
 
-      return cached || (await fetchPromise) || new Response("Offline", { status: 503, headers: { "Content-Type": "text/plain" } });
+      return (
+        cached ||
+        (await fetchPromise) ||
+        new Response("Offline", { status: 503, headers: { "Content-Type": "text/plain; charset=utf-8" } })
+      );
     })()
   );
 });

@@ -1,35 +1,57 @@
 import { createClient } from "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm";
 
 /* =========================================================
-   DOCE LUCRO — SUPABASE CLIENT
+   DOCE LUCRO — SUPABASE CLIENT (PRO)
    - Client único
-   - Sessão persistida
+   - Sessão persistida com storageKey fixo
    - Fallback seguro (app não quebra)
+   - Pronto pra SaaS (multi-device)
 ========================================================= */
 
-// ✅ Se quiser, você pode trocar isso depois para vir de um arquivo "env.js"
+// ✅ Ideal: depois a gente move isso para um env.js (sem bundler) ou Vercel Env (se virar build)
 const SUPABASE_URL = "https://fxiaxmyiqzmmqixlkhen.supabase.co";
-const SUPABASE_ANON_KEY = "sb_publishable_ByvFyYzpUfJfJf1RppomWm4A_LmmBV3sR".replace(
-  "fJfJf",
-  "fJf"
-); // pequena proteção contra cópia acidental (não muda a key final)
+const SUPABASE_ANON_KEY = "sb_publishable_ByvFyYzpUfJfJf1RppomWm4A_LmmBV3sR";
+
+// ✅ Storage robusto (alguns navegadores / modos privativos podem falhar)
+function getSafeStorage() {
+  try {
+    const t = "__dl_test__";
+    localStorage.setItem(t, "1");
+    localStorage.removeItem(t);
+    return localStorage;
+  } catch {
+    // fallback em memória (sessão não persiste entre reloads)
+    const mem = new Map();
+    return {
+      getItem: (k) => (mem.has(k) ? mem.get(k) : null),
+      setItem: (k, v) => mem.set(k, String(v)),
+      removeItem: (k) => mem.delete(k),
+    };
+  }
+}
 
 // Exporta sempre a mesma API esperada pelo app
 export const supabase = (() => {
   try {
     if (!SUPABASE_URL || !SUPABASE_ANON_KEY) throw new Error("Supabase env missing");
 
+    const storage = getSafeStorage();
+
     const client = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
       auth: {
         persistSession: true,
         autoRefreshToken: true,
-        detectSessionInUrl: true,
+
+        // ✅ Importante: chave fixa evita conflitos com outros projetos no mesmo domínio
+        storageKey: "doce-lucro-auth-v1",
+        storage,
+
+        // ✅ Para email/senha padrão NÃO precisa (só para OAuth/magiclink)
+        // Se no futuro você usar magic link/OAuth, a gente liga isso de volta.
+        detectSessionInUrl: false,
       },
-      // opcional: evita warnings se o fetch falhar em ambientes específicos
       global: {
-        headers: {
-          "x-client-info": "doce-lucro-web",
-        },
+        headers: { "x-client-info": "doce-lucro-web" },
       },
     });
 

@@ -1,6 +1,7 @@
 /* =========================================================
    DOCE LUCRO — UI PRO (Refinado / Mobile First / SaaS Feel)
    - Refinamento visual (sem alterar funcionalidade)
+   - ✅ Otimizado para performance no celular (menos jank)
 ========================================================= */
 
 /* ---------------------------
@@ -32,7 +33,7 @@
   --warn: #ffd166;
   --info: #4db8ff;
 
-  /* shadows (mais “premium” e menos pesado) */
+  /* shadows (premium, mas agora mais leve por padrão) */
   --shadow: 0 20px 70px rgba(0, 0, 0, 0.55);
   --shadowSoft: 0 10px 34px rgba(0, 0, 0, 0.32);
   --shadowMed: 0 10px 30px rgba(0, 0, 0, 0.34);
@@ -62,12 +63,18 @@
   --tap: 44px;
   --tap2: 46px;
 
-  /* new: subtle highlight */
+  /* subtle highlight */
   --hl: rgba(255, 255, 255, 0.06);
   --hl2: rgba(255, 255, 255, 0.10);
 
-  /* new: modal overlay */
+  /* modal overlay */
   --overlay: rgba(0, 0, 0, 0.55);
+
+  /* danger */
+  --danger1: #ff4d6d;
+  --danger2: #ff7a59;
+  --dangerGlow1: rgba(255, 77, 109, 0.22);
+  --dangerGlow2: rgba(255, 122, 89, 0.18);
 }
 
 :root[data-theme="light"] {
@@ -94,13 +101,15 @@
   --hl2: rgba(0, 0, 0, 0.06);
 
   --overlay: rgba(0, 0, 0, 0.45);
+
+  --dangerGlow1: rgba(255, 77, 109, 0.16);
+  --dangerGlow2: rgba(255, 122, 89, 0.12);
 }
 
 /* ---------------------------
    RESET / BASE
 --------------------------- */
 * { box-sizing: border-box; }
-
 html, body { height: 100%; }
 
 body {
@@ -116,20 +125,26 @@ body {
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   -webkit-tap-highlight-color: rgba(255, 79, 163, 0.18);
+
+  /* ✅ mobile: rolagem mais “sólida” */
+  overscroll-behavior-y: none;
 }
 
 img, svg, video, canvas { max-width: 100%; height: auto; display: block; }
 input, select, textarea, button { font: inherit; }
-
 a { color: inherit; text-decoration: none; }
 button { font-family: inherit; }
-
 ::selection { background: rgba(255, 79, 163, 0.22); }
 
 :focus-visible {
   outline: 0;
   box-shadow: var(--ring);
   border-radius: 14px;
+}
+
+/* ✅ transição suave de tema (usado pelo ui.js) */
+.theme-transition * {
+  transition: background-color 180ms ease, color 180ms ease, border-color 180ms ease, box-shadow 180ms ease !important;
 }
 
 /* scrollbar (discreto) */
@@ -161,14 +176,19 @@ button { font-family: inherit; }
   z-index: 50;
   padding: calc(14px + var(--safeTop)) 16px 12px;
 
-  backdrop-filter: var(--glass);
-  -webkit-backdrop-filter: var(--glass);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
 
+  /* ✅ backdrop só se suportado (melhor compat/perf) */
   background: linear-gradient(to bottom,
     rgba(0, 0, 0, 0.58),
     rgba(0, 0, 0, 0.10)
   );
-  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+@supports ((backdrop-filter: blur(10px)) or (-webkit-backdrop-filter: blur(10px))) {
+  .topbar {
+    backdrop-filter: var(--glass);
+    -webkit-backdrop-filter: var(--glass);
+  }
 }
 
 :root[data-theme="light"] .topbar {
@@ -258,7 +278,6 @@ button { font-family: inherit; }
   font-size: 20px;
 }
 
-/* hover só quando faz sentido (desktop) */
 @media (hover:hover) and (pointer:fine) {
   .iconbtn:hover {
     background: rgba(255, 255, 255, 0.10);
@@ -297,12 +316,13 @@ button { font-family: inherit; }
 
 /* ---------------------------
    CARDS
+   ✅ performance: sombra mais leve por padrão
 --------------------------- */
 .card {
   background: linear-gradient(180deg, var(--card), var(--card2));
   border: 1px solid var(--stroke);
   border-radius: var(--r);
-  box-shadow: var(--shadow);
+  box-shadow: var(--shadowSoft);
   overflow: hidden;
   transition: var(--transition);
 }
@@ -367,6 +387,7 @@ button { font-family: inherit; }
   transition: var(--transition);
   font-size: 14px;
   min-height: var(--tap);
+  touch-action: manipulation;
 }
 
 @media (hover:hover) and (pointer:fine) {
@@ -397,11 +418,6 @@ button { font-family: inherit; }
   min-height: 40px;
 }
 
-.btn--danger { border-color: rgba(255, 93, 93, 0.35); color: var(--bad); }
-@media (hover:hover) and (pointer:fine) {
-  .btn--danger:hover { background: rgba(255, 93, 93, 0.12); }
-}
-
 /* ---------------------------
    ROWS / KPI
 --------------------------- */
@@ -418,6 +434,7 @@ button { font-family: inherit; }
 
 :root[data-theme="light"] .row { border-top: 1px solid rgba(0, 0, 0, 0.06); }
 .row:first-child { border-top: 0; }
+
 @media (hover:hover) and (pointer:fine) {
   .row:hover { background: var(--hl); }
 }
@@ -455,7 +472,6 @@ button { font-family: inherit; }
   overflow: hidden;
 }
 
-/* ✅ Compat: aceita 3 convenções sem exigir mudar HTML/JS */
 .progress__bar,
 .progress-bar,
 .progress_bar {
@@ -467,7 +483,7 @@ button { font-family: inherit; }
 }
 
 /* ---------------------------
-   PILLS (Pagamento: Pix/Dinheiro/Cartão)
+   PILLS (Pagamento)
 --------------------------- */
 .pillrow {
   display: flex;
@@ -503,14 +519,12 @@ button { font-family: inherit; }
     border-color: rgba(255,255,255,0.24);
     transform: translateY(-1px);
   }
-
   :root[data-theme="light"] .pill:hover {
     background: rgba(0,0,0,0.06);
     border-color: rgba(0,0,0,0.18);
   }
 }
 
-/* ✅ Estado “selecionado” */
 .pill.is-active,
 .pill.active,
 .pill[data-active="true"],
@@ -523,9 +537,7 @@ button { font-family: inherit; }
     0 14px 40px rgba(124, 92, 255, 0.18);
 }
 
-/* "pressed" no mobile */
 .pill:active { transform: scale(0.99); }
-
 .value { color: var(--text); font-weight: 950; font-size: 13px; }
 
 /* ---------------------------
@@ -575,7 +587,7 @@ button { font-family: inherit; }
   border: 1px solid rgba(255, 255, 255, 0.14);
   padding: 10px 12px;
   border-radius: 14px;
-  box-shadow: var(--shadow);
+  box-shadow: var(--shadowSoft);
   opacity: 0;
   pointer-events: none;
   transition: opacity 0.2s ease, transform 0.2s ease;
@@ -599,7 +611,6 @@ button { font-family: inherit; }
 
 /* Inputs */
 .field { display: grid; gap: 6px; }
-
 .fieldgrid { display: grid; grid-template-columns: 1fr; gap: 10px; }
 @media (min-width: 720px) { .fieldgrid { grid-template-columns: 1fr 1fr; } }
 
@@ -623,6 +634,9 @@ button { font-family: inherit; }
   transition: var(--transition);
   font-size: 14px;
   min-height: var(--tap);
+
+  /* ✅ evita zoom estranho em iOS */
+  -webkit-text-size-adjust: 100%;
 }
 
 .input::placeholder { color: rgba(255, 255, 255, 0.42); }
@@ -634,7 +648,7 @@ button { font-family: inherit; }
   background: rgba(255, 255, 255, 0.09);
 }
 
-/* melhora autofill (Chrome) */
+/* autofill (Chrome) */
 input:-webkit-autofill,
 input:-webkit-autofill:hover,
 input:-webkit-autofill:focus {
@@ -655,7 +669,6 @@ input:-webkit-autofill:focus {
   background-position: right 12px center;
   padding-right: 36px;
 }
-
 :root[data-theme="light"] .select {
   background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%23000' d='M6 9L1 4h10z'/%3E%3C/svg%3E");
 }
@@ -717,7 +730,6 @@ input:-webkit-autofill:focus {
   padding: 6px;
   border-radius: 999px;
 }
-
 :root[data-theme="light"] .qty { background: rgba(0, 0, 0, 0.04); }
 
 .qbtn {
@@ -731,8 +743,8 @@ input:-webkit-autofill:focus {
   cursor: pointer;
   transition: var(--transition);
   font-size: 16px;
+  touch-action: manipulation;
 }
-
 @media (hover:hover) and (pointer:fine) {
   .qbtn:hover { background: rgba(255, 255, 255, 0.12); }
 }
@@ -755,7 +767,6 @@ input:-webkit-autofill:focus {
   padding: 10px 0;
   border-top: 1px solid rgba(255, 255, 255, 0.06);
 }
-
 :root[data-theme="light"] .cartrow { border-top: 1px solid rgba(0, 0, 0, 0.06); }
 .cartrow:first-child { border-top: 0; }
 
@@ -768,7 +779,6 @@ input:-webkit-autofill:focus {
   padding-top: 10px;
   border-top: 1px solid rgba(255, 255, 255, 0.06);
 }
-
 :root[data-theme="light"] .carttotal { border-top: 1px solid rgba(0, 0, 0, 0.06); }
 
 .carttotal .big {
@@ -783,12 +793,11 @@ input:-webkit-autofill:focus {
   height: 300px;
   margin: 12px 0;
 }
-
 @media (min-width: 720px) {
   .chart-container { height: 400px; }
 }
 
-/* Modal */
+/* Modal (sheet no mobile; central no desktop) */
 .modal {
   position: fixed;
   top: 0; left: 0; right: 0; bottom: 0;
@@ -797,8 +806,13 @@ input:-webkit-autofill:focus {
   align-items: flex-end;
   z-index: 100;
   animation: slideUp 0.26s ease;
-  backdrop-filter: blur(6px);
-  -webkit-backdrop-filter: blur(6px);
+}
+
+@supports ((backdrop-filter: blur(6px)) or (-webkit-backdrop-filter: blur(6px))) {
+  .modal {
+    backdrop-filter: blur(6px);
+    -webkit-backdrop-filter: blur(6px);
+  }
 }
 
 @keyframes slideUp {
@@ -816,7 +830,18 @@ input:-webkit-autofill:focus {
 
   border: 1px solid var(--stroke);
   border-bottom: 0;
-  box-shadow: var(--shadow);
+  box-shadow: var(--shadowSoft);
+}
+
+/* ✅ desktop: modal vira central (cara de SaaS) */
+@media (min-width: 760px) {
+  .modal { align-items: center; justify-content: center; }
+  .modal__content {
+    width: min(720px, calc(100% - 36px));
+    border-radius: var(--r);
+    max-height: min(86vh, 820px);
+    border-bottom: 1px solid var(--stroke);
+  }
 }
 
 .modal__header {
@@ -841,8 +866,8 @@ input:-webkit-autofill:focus {
   place-items: center;
   font-size: 18px;
   transition: var(--transition);
+  touch-action: manipulation;
 }
-
 @media (hover:hover) and (pointer:fine) {
   .modal__close:hover { background: rgba(255, 255, 255, 0.12); }
 }
@@ -862,10 +887,9 @@ input:-webkit-autofill:focus {
   border-top-color: var(--brand);
   animation: spin 1s linear infinite;
 }
-
 @keyframes spin { to { transform: rotate(360deg); } }
 
-/* Utility Classes */
+/* Utility */
 .gap-12 { gap: 12px; }
 .gap-16 { gap: 16px; }
 .mt-8 { margin-top: 8px; }
@@ -884,7 +908,7 @@ input:-webkit-autofill:focus {
 .justify-center { justify-content: center; }
 
 /* =========================================================
-   NAV — SaaS Dock (Premium) ✅ (único bloco, sem duplicar)
+   NAV — SaaS Dock (Premium)
 ========================================================= */
 .nav {
   position: fixed;
@@ -904,14 +928,18 @@ input:-webkit-autofill:focus {
   background: rgba(0, 0, 0, 0.58);
   border: 1px solid rgba(255, 255, 255, 0.10);
 
-  backdrop-filter: blur(22px);
-  -webkit-backdrop-filter: blur(22px);
-
   box-shadow:
     0 18px 55px rgba(0, 0, 0, 0.55),
     0 0 0 1px rgba(255, 255, 255, 0.04) inset;
 
   z-index: 60;
+}
+
+@supports ((backdrop-filter: blur(22px)) or (-webkit-backdrop-filter: blur(22px))) {
+  .nav {
+    backdrop-filter: blur(22px);
+    -webkit-backdrop-filter: blur(22px);
+  }
 }
 
 :root[data-theme="light"] .nav {
@@ -945,20 +973,15 @@ input:-webkit-autofill:focus {
 
   transform: translateZ(0);
   will-change: transform;
+  touch-action: manipulation;
 }
 
 @media (hover:hover) and (pointer:fine) {
-  .nav__item:hover {
-    background: rgba(255, 255, 255, 0.06);
-  }
-  :root[data-theme="light"] .nav__item:hover {
-    background: rgba(0, 0, 0, 0.04);
-  }
+  .nav__item:hover { background: rgba(255, 255, 255, 0.06); }
+  :root[data-theme="light"] .nav__item:hover { background: rgba(0, 0, 0, 0.04); }
 }
 
-.nav__item:active {
-  transform: scale(0.985);
-}
+.nav__item:active { transform: scale(0.985); }
 
 .nav__icon {
   font-size: 18px;
@@ -980,7 +1003,7 @@ input:-webkit-autofill:focus {
   .nav__item { padding: 9px 6px; }
 }
 
-/* ===== estado ativo (SaaS) ===== */
+/* estado ativo */
 .nav__item.is-active {
   color: var(--text);
   border-color: transparent;
@@ -1011,7 +1034,6 @@ input:-webkit-autofill:focus {
   transform: translateY(-1px) scale(1.03);
 }
 
-/* indicador com brand gradient */
 .nav__item.is-active::after {
   content: "";
   position: absolute;
@@ -1029,93 +1051,22 @@ input:-webkit-autofill:focus {
 }
 
 @media (max-width: 360px) {
-  .nav__item.is-active::after {
-    width: 18px;
-  }
+  .nav__item.is-active::after { width: 18px; }
 }
 
-.nav__item:focus-visible {
-  box-shadow: var(--ring);
-}
+.nav__item:focus-visible { box-shadow: var(--ring); }
 
 /* =========================================================
-   ✅ CTA — Registrar saída (PRO + VISÍVEL)
+   CTA — Registrar saída (PRO + VISÍVEL)
 ========================================================= */
-
-/* tokens extras (seguro e consistente) */
-:root {
-  --danger1: #ff4d6d;
-  --danger2: #ff7a59;
-  --dangerGlow1: rgba(255, 77, 109, 0.22);
-  --dangerGlow2: rgba(255, 122, 89, 0.18);
-}
-
-/* 1) Se o botão for .btn + .btn--danger (recomendado) */
-.btn.btn--danger {
-  border: 0;
-  color: #fff;
-  background: linear-gradient(135deg, rgba(255, 77, 109, 0.98), rgba(255, 122, 89, 0.98));
-  box-shadow:
-    0 18px 55px var(--dangerGlow1),
-    0 18px 55px var(--dangerGlow2),
-    0 0 0 1px rgba(255,255,255,0.10) inset;
-  letter-spacing: -0.1px;
-}
-
-/* Hover (desktop) */
-@media (hover:hover) and (pointer:fine) {
-  .btn.btn--danger:hover {
-    transform: translateY(-2px);
-    filter: brightness(1.02);
-    box-shadow:
-      0 22px 65px rgba(255, 77, 109, 0.26),
-      0 22px 65px rgba(255, 122, 89, 0.20),
-      0 0 0 1px rgba(255,255,255,0.14) inset;
-  }
-}
-
-/* Active (mobile) */
-.btn.btn--danger:active {
-  transform: scale(0.99);
-}
-
-/* Foco acessível e bonito */
-.btn.btn--danger:focus-visible {
-  box-shadow:
-    0 0 0 4px rgba(255, 77, 109, 0.22),
-    0 0 0 1px rgba(255,255,255,0.16) inset,
-    0 22px 65px rgba(255, 77, 109, 0.22);
-}
-
-/* 2) Se você tiver/usar uma classe específica no HTML (sem mexer em lógica) */
+.btn.btn--danger,
 .btn--cta-danger,
 .btn--saida,
 .btn--out,
-.registrar-saida {
-  border: 0;
-  color: #fff;
-  background: linear-gradient(135deg, rgba(255, 77, 109, 0.98), rgba(255, 122, 89, 0.98));
-  box-shadow:
-    0 18px 55px var(--dangerGlow1),
-    0 18px 55px var(--dangerGlow2),
-    0 0 0 1px rgba(255,255,255,0.10) inset;
-  letter-spacing: -0.1px;
-}
-
-/* 3) Se a área tiver wrapper de “saídas”, tenta capturar botão lá dentro */
+.registrar-saida,
 .saidas .btn,
 .saida .btn,
-#saidas .btn {
-  border: 0;
-  color: #fff;
-  background: linear-gradient(135deg, rgba(255, 77, 109, 0.98), rgba(255, 122, 89, 0.98));
-  box-shadow:
-    0 18px 55px var(--dangerGlow1),
-    0 18px 55px var(--dangerGlow2),
-    0 0 0 1px rgba(255,255,255,0.10) inset;
-}
-
-/* ✅ 3.5) FIX: seu botão é #btnCashOut (no Home) e vem só com class="btn" */
+#saidas .btn,
 #btnCashOut,
 button#btnCashOut {
   border: 0;
@@ -1129,6 +1080,7 @@ button#btnCashOut {
 }
 
 @media (hover:hover) and (pointer:fine) {
+  .btn.btn--danger:hover,
   #btnCashOut:hover,
   button#btnCashOut:hover {
     transform: translateY(-2px);
@@ -1140,11 +1092,13 @@ button#btnCashOut {
   }
 }
 
+.btn.btn--danger:active,
 #btnCashOut:active,
 button#btnCashOut:active {
   transform: scale(0.99);
 }
 
+.btn.btn--danger:focus-visible,
 #btnCashOut:focus-visible,
 button#btnCashOut:focus-visible {
   box-shadow:
@@ -1153,17 +1107,11 @@ button#btnCashOut:focus-visible {
     0 22px 65px rgba(255, 77, 109, 0.22);
 }
 
-/* 4) Não deixar “apagado” sem querer */
+/* não deixar apagado */
 .btn:not([disabled]) { opacity: 1; }
-
-/* Mantém disabled com cara de disabled */
 .btn[disabled],
-button[disabled] {
-  opacity: 0.55;
-  cursor: not-allowed;
-}
+button[disabled] { opacity: 0.55; cursor: not-allowed; }
 
-/* Light theme: premium sem estourar */
 :root[data-theme="light"] .btn.btn--danger,
 :root[data-theme="light"] .btn--cta-danger,
 :root[data-theme="light"] .btn--saida,

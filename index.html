@@ -2,24 +2,43 @@
 <html lang="pt-br">
 <head>
   <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
+
+  <!-- Viewport (suporte notch iPhone + Android) -->
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+
+  <!-- Tema / PWA -->
   <meta name="theme-color" content="#070A14" />
   <meta name="color-scheme" content="dark light" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="application-name" content="Doce Lucro" />
+
+  <!-- iOS -->
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-title" content="Doce Lucro" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="format-detection" content="telephone=no" />
+
+  <!-- SEO -->
   <meta name="description" content="Doce Lucro — Lucro real em segundos" />
+  <link rel="canonical" href="./" />
+
   <title>Doce Lucro</title>
 
   <!-- Manifest -->
-  <link rel="manifest" href="/manifest.webmanifest">
+  <link rel="manifest" href="./manifest.webmanifest" />
 
-  <!-- (Opcional) Ícone para iOS se você tiver o arquivo -->
-  <!-- <link rel="apple-touch-icon" href="/assets/icons/icon-192.png"> -->
+  <!-- Ícones -->
+  <link rel="icon" href="./assets/icons/icon-192.png" />
+  <link rel="apple-touch-icon" href="./assets/icons/icon-192.png" />
+  <!-- Se tiver 180x180, use abaixo -->
+  <!-- <link rel="apple-touch-icon" sizes="180x180" href="./assets/icons/apple-touch-icon.png" /> -->
 
-  <!-- Preload do CSS (melhora carregamento) -->
-  <link rel="preload" href="/styles/styles.css?v=1" as="style" />
-  <link rel="stylesheet" href="/styles/styles.css?v=1" />
+  <!-- CSS -->
+  <link rel="preload" href="./styles/styles.css?v=1" as="style" />
+  <link rel="stylesheet" href="./styles/styles.css?v=1" />
 
-  <!-- Preload do JS principal (melhora carregamento; não altera funcionalidade) -->
-  <link rel="modulepreload" href="/src/app.js" />
+  <!-- Preload JS -->
+  <link rel="modulepreload" href="./src/app.js" />
 </head>
 
 <body>
@@ -88,6 +107,6 @@
   </div>
 
   <!-- JS principal -->
-  <script type="module" src="/src/app.js"></script>
+  <script type="module" src="./src/app.js"></script>
 </body>
 </html>

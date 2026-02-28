@@ -7,11 +7,17 @@ let state = normalizeState(loadState());
 let session = null;
 
 /* =========================================================
-   ✅ CLOUD SYNC (Supabase) — salva state por usuário
+   ✅ CLOUD SYNC (Supabase) — robusto, sem duplicações
+   - Carrega do cloud ao logar
+   - Salva no cloud com debounce
+   - Resolve conflito via updated_at
+   - Nunca “zera” seu app se o cloud vier vazio
 ========================================================= */
 let cloudUserId = null;
+
 let saveTimer = null;
 let lastSavedHash = "";
+let isApplyingCloud = false; // evita loop (carrega -> persist -> salva)
 
 function stableHash(obj) {
   try {
@@ -27,13 +33,61 @@ async function getUser() {
   return data?.user || null;
 }
 
-async function bindAuthSync() {
-  const u = await getUser();
-  cloudUserId = u?.id || null;
+function getUserId() {
+  return session?.user?.id || cloudUserId || null;
+}
 
-  supabase.auth.onAuthStateChange((_event, newSession) => {
-    cloudUserId = newSession?.user?.id || null;
-  });
+async function refreshSession() {
+  try {
+    const { data } = await supabase.auth.getSession();
+    session = data?.session || null;
+    cloudUserId = session?.user?.id || null;
+  } catch {
+    session = null;
+    cloudUserId = null;
+  }
+}
+
+function getLocalUpdatedAt(s) {
+  // tolerante: se não existir, retorna 0
+  const t = s?.__updatedAt;
+  const ms = t ? new Date(t).getTime() : 0;
+  return Number.isFinite(ms) ? ms : 0;
+}
+
+function stampLocalUpdatedAt(s) {
+  s.__updatedAt = new Date().toISOString();
+  return s;
+}
+
+function mergePreferNewer(localState, cloudState) {
+  // Se cloud vier vazio/sem estrutura, não destrói local
+  const cloudOk = cloudState && typeof cloudState === "object" && (cloudState.products || cloudState.sales || cloudState.orders || cloudState.cashMoves);
+  if (!cloudOk) return localState;
+
+  // Preferir o que for “mais novo”
+  const l = getLocalUpdatedAt(localState);
+  const c = getLocalUpdatedAt(cloudState);
+  if (c > l) return cloudState;
+  return localState;
+}
+
+async function ensureCloudRow(userId, seedState) {
+  // cria registro se não existir (sem depender de erro 406/116 que varia)
+  const { data: existing, error: selErr } = await supabase
+    .from("user_state")
+    .select("user_id")
+    .eq("user_id", userId)
+    .maybeSingle();
+
+  if (selErr) return; // se deu erro, deixa pra lá (local continua)
+
+  if (!existing) {
+    const payload = stampLocalUpdatedAt(normalizeState(seedState));
+    await supabase
+      .from("user_state")
+      .insert({ user_id: userId, data: payload, updated_at: new Date().toISOString() });
+  }
 }
 
 async function loadStateFromCloud(localState) {
@@ -42,83 +96,77 @@ async function loadStateFromCloud(localState) {
 
   cloudUserId = u.id;
 
+  await ensureCloudRow(u.id, localState);
+
   const { data, error } = await supabase
     .from("user_state")
-    .select("data")
+    .select("data, updated_at")
     .eq("user_id", u.id)
-    .single();
-
-  // Se ainda não existir registro → cria
-  if (error && (error.code === "PGRST116" || error.status === 406)) {
-    await supabase
-  .from("user_state")
-  .upsert(
-    { user_id: cloudUserId, data: currentState, updated_at: new Date().toISOString() },
-    { onConflict: "user_id" }
-  );
-
-    lastSavedHash = stableHash(localState);
-    return { state: localState };
-  }
+    .maybeSingle();
 
   if (error) {
     console.warn("Erro ao carregar cloud state:", error);
     return { state: localState };
   }
 
-  const cloudState = data?.data ?? {};
-  lastSavedHash = stableHash(cloudState);
+  const cloudState = data?.data ?? null;
 
-  return { state: cloudState };
+  // merge inteligente (não perde local se cloud vier vazio)
+  const merged = mergePreferNewer(localState, cloudState || localState);
+
+  lastSavedHash = stableHash(merged);
+  return { state: merged };
 }
 
 function scheduleSaveToCloud(currentState, debounceMs = 700) {
   if (!cloudUserId) return;
+  if (isApplyingCloud) return; // evita loop durante applyCloudAfterLogin
 
-  const h = stableHash(currentState);
+  const normalized = stampLocalUpdatedAt(normalizeState(currentState));
+
+  const h = stableHash(normalized);
   if (h === lastSavedHash) return;
 
   if (saveTimer) clearTimeout(saveTimer);
 
   saveTimer = setTimeout(async () => {
-    const { error } = await supabase
-    .from("user_state")
-    .upsert(
-      { user_id: cloudUserId, data: currentState, updated_at: new Date().toISOString() },
-      { onConflict: "user_id" }
-    );
+    try {
+      const { error } = await supabase
+        .from("user_state")
+        .upsert(
+          { user_id: cloudUserId, data: normalized, updated_at: new Date().toISOString() },
+          { onConflict: "user_id" }
+        );
 
-    if (error) {
-      console.warn("Erro ao salvar cloud state:", error);
-      return;
+      if (error) {
+        console.warn("Erro ao salvar cloud state:", error);
+        return;
+      }
+
+      lastSavedHash = h;
+    } catch (e) {
+      console.warn("Erro inesperado ao salvar cloud state:", e);
     }
-
-    lastSavedHash = h;
   }, debounceMs);
 }
 
 async function applyCloudAfterLogin() {
+  isApplyingCloud = true;
   const loaded = await loadStateFromCloud(state);
   state = normalizeState(loaded.state);
 
-  saveState(state);
-  setTheme(state.theme || "dark");
-  setBrand(state.storeName || "");
-}
-
-async function applyCloudAfterLogin() {
-  const loaded = await loadStateFromCloud(state);
-  state = normalizeState(loaded.state);
-
-  // mantém o local igual ao cloud (e vice-versa)
+  // mantém local igual ao “melhor” (merge)
   saveState(state);
 
-  // aplica UI caso tenha mudado no cloud
+  // aplica UI
   setTheme(state.theme || "dark");
   setBrand(state.storeName || "");
   const btnTheme = qs("#btnTheme");
   syncThemeIcon(btnTheme);
+
+  isApplyingCloud = false;
 }
+
 /* =========================================================
    CORE
 ========================================================= */
@@ -161,6 +209,9 @@ async function mount() {
 
     if (session) {
       await applyCloudAfterLogin();
+    } else {
+      // logout: mantém local, só desliga cloud
+      cloudUserId = null;
     }
 
     render(state.route || "home");
@@ -170,16 +221,6 @@ async function mount() {
   navigate(hashRoute || state.route || "home", true);
 
   registerSW();
-}
-
-async function refreshSession() {
-  try {
-    const { data } = await supabase.auth.getSession();
-    session = data?.session || null;
-    cloudUserId = session?.user?.id || cloudUserId || null; // ✅ ADD
-  } catch {
-    session = null;
-  }
 }
 
 function normalizeState(s) {
@@ -239,6 +280,9 @@ function normalizeState(s) {
     };
   });
 
+  // ✅ garante __updatedAt
+  if (!merged.__updatedAt) merged.__updatedAt = new Date().toISOString();
+
   return merged;
 }
 
@@ -250,10 +294,13 @@ function normalizeState(s) {
 function persist() {
   state = normalizeState(state);
 
+  // atualiza carimbo local (para conflito)
+  stampLocalUpdatedAt(state);
+
   // local sempre
   saveState(state);
 
-  // ✅ cloud: usa cloudUserId (mais confiável que session)
+  // ✅ cloud
   if (cloudUserId) {
     scheduleSaveToCloud(state);
   }
@@ -363,7 +410,6 @@ function renderSupabaseLogin(root) {
     await refreshSession();
     cloudUserId = getUserId();
 
-    // ✅ puxa cloud imediatamente
     await applyCloudAfterLogin();
 
     toast("Logado ✅", "success");
@@ -1084,10 +1130,10 @@ function renderProductAddRow(product, cart) {
 }
 
 /* =========================================================
-   ORDERS
-========================================================= */
-/* (A PARTIR DAQUI, SEU CÓDIGO SEGUE IGUAL AO QUE VOCÊ MANDOU)
-   ... eu mantive todo o resto igual, sem mudar lógica.
+   ORDERS / PRODUCTS / REPORTS / MORE
+   ✅ A PARTIR DAQUI, mantive seu código original (sem mexer na lógica),
+   porque o foco principal aqui era estabilizar o cloud sync e o core.
+   (Seu arquivo já veio completo, então segue tudo abaixo igual.)
 ========================================================= */
 
 function renderOrders(root) {
@@ -1278,9 +1324,7 @@ function markOrderDelivered(orderId, root) {
 }
 
 /* =========================================================
-   (RESTO DO SEU ARQUIVO)
-   ⚠️ Aqui embaixo é exatamente o que você mandou (helpers, products, reports, more, etc).
-   Mantive igual, só o cloud sync foi corrigido.
+   (RESTO DO SEU ARQUIVO) — segue igual
 ========================================================= */
 
 function showOrderModal(orderId, root) {
@@ -2430,3 +2474,51 @@ function registerSW() {
 
 // start
 mount();
+// =========================================================
+// PWA / SERVICE WORKER — Vercel safe + iOS safe
+// - register com base path correto (preview/subpasta)
+// - auto update + reload quando novo SW assumir
+// =========================================================
+if ("serviceWorker" in navigator) {
+  window.addEventListener("load", async () => {
+    try {
+      // ✅ base path seguro (funciona em /, preview, subpasta)
+      const base = new URL("./", window.location.href);
+      const swUrl = new URL("sw.js", base).toString();
+
+      const reg = await navigator.serviceWorker.register(swUrl);
+
+      // ✅ Quando o novo SW assumir controle, recarrega e pega a versão nova
+      let refreshing = false;
+      navigator.serviceWorker.addEventListener("controllerchange", () => {
+        if (refreshing) return;
+        refreshing = true;
+        window.location.reload();
+      });
+
+      // ✅ Detecta update automaticamente
+      reg.addEventListener("updatefound", () => {
+        const newWorker = reg.installing;
+        if (!newWorker) return;
+
+        newWorker.addEventListener("statechange", () => {
+          // novo SW instalado
+          if (newWorker.state === "installed") {
+            // se já existe controller, é update (não é primeiro install)
+            if (navigator.serviceWorker.controller) {
+              // força ativação imediata
+              newWorker.postMessage({ type: "SKIP_WAITING" });
+            }
+          }
+        });
+      });
+
+      // ✅ opcional: checa update ao abrir o app (bom pra produção)
+      try { reg.update(); } catch {}
+
+      console.log("✅ SW registrado:", swUrl);
+    } catch (err) {
+      console.warn("⚠️ SW não registrado:", err);
+    }
+  });
+}
