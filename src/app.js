@@ -3,87 +3,141 @@ import { brl, qs, qsa, setTheme, setBrand } from "./ui.js";
 import { calcCardFee, calcProfit, calcMargin, calcROI } from "./db.js";
 import { supabase } from "./supabase.js";
 
+/* =========================================================
+   DOCE LUCRO — APP.JS (COMPLETO / UNIFICADO / SEM DUPLICAÇÕES)
+   - Auth Supabase (login/cadastro/recuperação)
+   - Cloud Sync (user_state) + merge por __updatedAt
+   - Offline-first (localStorage sempre)
+   - UX dinheiro global (0,00 some no foco)
+   - SW update fix (iOS/Vercel)
+========================================================= */
+
 let state = normalizeState(loadState());
+
 let session = null;
 let cloudUserId = null;
-let isApplyingCloud = false;
-// =========================================================
-// ✅ AUTH/SESSION GLOBALS (FIX)
-// =========================================================
 
-// sempre retorna o userId atual (session ou cloud)
+let isApplyingCloud = false;
+let saveTimer = null;
+let lastSavedHash = "";
+
+/* =========================================================
+   ✅ UTILS (HASH / MERGE / CLOUD HELPERS)
+========================================================= */
+
+// hash estável do estado (pra evitar loop de save)
+function stableHash(obj) {
+  try {
+    const seen = new WeakSet();
+    const s = JSON.stringify(obj, function (k, v) {
+      if (v && typeof v === "object") {
+        if (seen.has(v)) return;
+        seen.add(v);
+        // ordena chaves
+        if (!Array.isArray(v)) {
+          const out = {};
+          Object.keys(v)
+            .sort()
+            .forEach((kk) => (out[kk] = v[kk]));
+          return out;
+        }
+      }
+      return v;
+    });
+    // hash simples (rápido) — suficiente p/ debounce
+    let h = 2166136261;
+    for (let i = 0; i < s.length; i++) {
+      h ^= s.charCodeAt(i);
+      h += (h << 1) + (h << 4) + (h << 7) + (h << 8) + (h << 24);
+    }
+    return (h >>> 0).toString(16);
+  } catch {
+    return String(Date.now());
+  }
+}
+
+// carimba __updatedAt somente quando realmente salvar local/cloud
+function stampLocalUpdatedAt(s) {
+  try {
+    if (s && typeof s === "object") s.__updatedAt = new Date().toISOString();
+  } catch {}
+  return s;
+}
+
+function getLocalUpdatedAt(s) {
+  try {
+    const t = s?.__updatedAt;
+    const ms = t ? new Date(t).getTime() : 0;
+    return Number.isFinite(ms) ? ms : 0;
+  } catch {
+    return 0;
+  }
+}
+
+function mergePreferNewer(localState, cloudState) {
+  const local = normalizeState(localState);
+  const cloud = normalizeState(cloudState);
+
+  const lt = getLocalUpdatedAt(local);
+  const ct = getLocalUpdatedAt(cloud);
+
+  // preferir o que é mais recente
+  if (ct > lt) return cloud;
+  return local;
+}
+
+async function getUser() {
+  try {
+    const { data, error } = await supabase.auth.getUser();
+    if (error) return null;
+    return data?.user || null;
+  } catch {
+    return null;
+  }
+}
+
+async function ensureCloudRow(userId, localState) {
+  if (!userId) return;
+  try {
+    // cria linha se não existir
+    await supabase
+      .from("user_state")
+      .upsert(
+        {
+          user_id: userId,
+          data: normalizeState(localState),
+          updated_at: new Date().toISOString(),
+        },
+        { onConflict: "user_id" }
+      );
+  } catch {}
+}
+
+/* =========================================================
+   ✅ AUTH/SESSION
+========================================================= */
+
 function getUserId() {
   return session?.user?.id || cloudUserId || null;
 }
 
-// atualiza a sessão do Supabase (necessário pro login sair da tela)
 async function refreshSession() {
   try {
     const { data, error } = await supabase.auth.getSession();
     if (error) throw error;
-
     session = data?.session || null;
     cloudUserId = session?.user?.id || null;
-  } catch (e) {
+  } catch {
     session = null;
     cloudUserId = null;
-  }
-}
-/* =========================================================
-   ✅ AUTH FLOW — entra e sai da tela de login
-   - mostra erro via alert
-   - atualiza session/cloudUserId
-   - chama applyCloudAfterLogin()
-========================================================= */
-
-// 🔧 Ajuste essas funções para as suas telas/rotas:
-function showLogin() {
-  // EXEMPLO: se você usa uma section/página de login
-  // qs("#pageLogin")?.classList.remove("hidden");
-  // qs("#pageApp")?.classList.add("hidden");
-}
-
-function showApp() {
-  // EXEMPLO:
-  // qs("#pageLogin")?.classList.add("hidden");
-  // qs("#pageApp")?.classList.remove("hidden");
-}
-
-async function enterAppAfterAuth() {
-  // garante session atualizada
-  await refreshSession();
-
-  if (!session?.user) {
-    // sem sessão, mantém login
-    showLogin();
-    return;
-  }
-
-  // aplica cloud + UI
-  await applyCloudAfterLogin();
-
-  // ✅ aqui você manda o app ir pra home.
-  // Se você tem navigate():
-  try {
-    showApp();
-    if (typeof navigate === "function") navigate("inicio", true);
-    // se você não tem navigate, chama seu render/mount:
-    else if (typeof mount === "function") mount();
-  } catch (e) {
-    console.warn("Falha ao entrar no app:", e);
-    showApp();
   }
 }
 
 async function doLogin(email, password) {
   try {
-    const { data, error } = await supabase.auth.signInWithPassword({
-      email,
-      password,
-    });
+    const { data, error } = await supabase.auth.signInWithPassword({ email, password });
     if (error) throw error;
 
-    // atualiza sessão e entra
     session = data?.session || null;
     cloudUserId = session?.user?.id || null;
 
@@ -91,22 +145,19 @@ async function doLogin(email, password) {
     return true;
   } catch (err) {
     console.error("ERRO LOGIN:", err);
-    alert(err?.message || "Erro ao fazer login");
+    toast(err?.message || "Erro ao fazer login", "error");
     return false;
   }
 }
 
 async function doSignup(email, password) {
   try {
-    const { data, error } = await supabase.auth.signUp({
-      email,
-      password,
-    });
+    const { data, error } = await supabase.auth.signUp({ email, password });
     if (error) throw error;
 
-    // ⚠️ Se confirmação de e-mail estiver ativa, NÃO vem session aqui.
+    // Se confirmação por e-mail estiver ativa, pode não vir session
     if (!data?.session) {
-      alert("Conta criada! Agora confirme o e-mail para conseguir entrar.");
+      toast("Conta criada! Confirme o e-mail para entrar.", "info");
       return false;
     }
 
@@ -117,37 +168,26 @@ async function doSignup(email, password) {
     return true;
   } catch (err) {
     console.error("ERRO SIGNUP:", err);
-    alert(err?.message || "Erro ao criar conta");
+    toast(err?.message || "Erro ao criar conta", "error");
     return false;
   }
 }
 
-/* =========================================================
-   ✅ LISTENER GLOBAL — garante troca automática de tela
-========================================================= */
-supabase.auth.onAuthStateChange(async (event, sess) => {
-  console.log("AUTH EVENT:", event);
-  session = sess || null;
-  cloudUserId = session?.user?.id || null;
-
-  if (session?.user) {
-    await enterAppAfterAuth();
-  } else {
-    showLogin();
-  }
-});
-
-/* =========================================================
-   ✅ BOOT — quando abrir o app, decide login x app
-========================================================= */
-(async () => {
+async function enterAppAfterAuth() {
   await refreshSession();
-  if (session?.user) {
-    await enterAppAfterAuth();
-  } else {
-    showLogin();
+
+  if (!session?.user) {
+    render(state.route || "home");
+    return;
   }
-})();
+
+  await applyCloudAfterLogin();
+  render(state.route || "home");
+}
+
+/* =========================================================
+   ✅ CLOUD LOAD/SAVE
+========================================================= */
 
 async function loadStateFromCloud(localState) {
   const u = await getUser();
@@ -171,10 +211,10 @@ async function loadStateFromCloud(localState) {
 
     const cloudState = data?.data ?? null;
 
-    // merge inteligente (não perde local se cloud vier vazio)
+    // merge inteligente
     const merged = mergePreferNewer(localState, cloudState || localState);
 
-    // hash do estado “real” (sem forçar novo __updatedAt agora)
+    // NÃO carimbar __updatedAt aqui. Só calcula hash do merged
     lastSavedHash = stableHash(normalizeState(merged));
     return { state: merged };
   } catch (e) {
@@ -187,8 +227,7 @@ function scheduleSaveToCloud(currentState, debounceMs = 700) {
   if (!cloudUserId) return;
   if (isApplyingCloud) return;
 
-  // ✅ IMPORTANTÍSSIMO:
-  // compara hash SEM mudar __updatedAt agora, senão vira loop infinito
+  // NÃO carimbar aqui senão vira loop
   const base = normalizeState(currentState);
   const baseHash = stableHash(base);
   if (baseHash === lastSavedHash) return;
@@ -197,7 +236,7 @@ function scheduleSaveToCloud(currentState, debounceMs = 700) {
 
   saveTimer = setTimeout(async () => {
     try {
-      // Só carimba __updatedAt quando realmente for salvar
+      // carimba somente quando for salvar
       const normalized = stampLocalUpdatedAt(normalizeState(currentState));
 
       const { error } = await supabase
@@ -212,7 +251,6 @@ function scheduleSaveToCloud(currentState, debounceMs = 700) {
         return;
       }
 
-      // depois de salvar, atualiza o hash baseado no estado salvo (já com __updatedAt)
       lastSavedHash = stableHash(normalized);
     } catch (e) {
       console.warn("Erro inesperado ao salvar cloud state:", e);
@@ -226,7 +264,7 @@ async function applyCloudAfterLogin() {
     const loaded = await loadStateFromCloud(state);
     state = normalizeState(loaded.state);
 
-    // mantém local igual ao “melhor” (merge)
+    // mantém local igual ao merge “melhor”
     saveState(state);
 
     // aplica UI
@@ -242,49 +280,8 @@ async function applyCloudAfterLogin() {
 }
 
 /* =========================================================
-   CORE
+   ✅ STATE / PERSIST
 ========================================================= */
-async function mount() {
-  setTheme(state.theme || "dark");
-  setBrand(state.storeName || "");
-
-  const btnTheme = qs("#btnTheme");
-  syncThemeIcon(btnTheme);
-
-  btnTheme?.addEventListener("click", () => {
-    state.theme = state.theme === "light" ? "dark" : "light";
-    persist();
-    setTheme(state.theme);
-    syncThemeIcon(btnTheme);
-  });
-
-  window.addEventListener("hashchange", () => {
-    const r = (location.hash || "").replace("#", "").trim();
-    if (r) navigate(r, true);
-  });
-
-  qsa(".nav__item").forEach((btn) => {
-    btn.addEventListener("click", () => navigate(btn.dataset.route));
-  });
-
-  // ✅ pega sessão atual
-  await refreshSession();
-  cloudUserId = getUserId();
-
-  // ✅ se já estiver logado, carrega do cloud agora
-  if (session) {
-    await applyCloudAfterLogin();
-  }
-
-  // ✅ Listener ÚNICO: mudanças de auth (login/logout)
-  
-
-  const hashRoute = (location.hash || "").replace("#", "").trim();
-navigate(hashRoute || state.route || "home", true);
-
-// ✅ ativa UX global de dinheiro (0,00 some ao focar)
-bindGlobalMoneyUX();
-}
 
 function normalizeState(s) {
   const base = getDefaultState();
@@ -302,7 +299,7 @@ function normalizeState(s) {
 
   merged.ui.saleCart = merged.ui.saleCart && typeof merged.ui.saleCart === "object" ? merged.ui.saleCart : {};
 
-  // ✅ rascunhos (itens + formulário) por key (new / edit:<id>)
+  // rascunhos
   merged.ui.orderDraftItems =
     merged.ui.orderDraftItems && typeof merged.ui.orderDraftItems === "object" ? merged.ui.orderDraftItems : {};
   merged.ui.orderDraftForm =
@@ -325,7 +322,6 @@ function normalizeState(s) {
   merged.auth.pin = typeof merged.auth.pin === "string" ? merged.auth.pin : "";
   merged.auth.unlocked = merged.auth.unlocked === true;
 
-  // ✅ compat/normalização de encomendas antigas
   merged.orders = (merged.orders || []).map((o) => {
     const total = Number(o?.total || 0);
     const sinal = Number(o?.sinal || 0);
@@ -335,7 +331,6 @@ function normalizeState(s) {
       sinal,
       createdAt: o?.createdAt || new Date().toISOString(),
       status: o?.status || "aberta",
-      // novos campos (não quebram nada)
       metodoSinal: o?.metodoSinal || "pix",
       metodoRestante: o?.metodoRestante || "pix",
       sinalRegistrado: o?.sinalRegistrado === true,
@@ -343,51 +338,27 @@ function normalizeState(s) {
     };
   });
 
-  // ✅ garante __updatedAt
   if (!merged.__updatedAt) merged.__updatedAt = new Date().toISOString();
 
   return merged;
 }
 
-/**
- * ✅ Persistência local + cloud (quando logado)
- * - Local sempre (offline)
- * - Cloud se tiver session (sincroniza entre navegadores)
- */// =========================================================
-// ✅ UPDATED_AT helpers (FIX) — evita crash no persist()
-// =========================================================
-function stampLocalUpdatedAt(s) {
-  try {
-    if (s && typeof s === "object") {
-      s.__updatedAt = new Date().toISOString();
-    }
-  } catch {}
-  return s;
-}
-
-function getLocalUpdatedAt(s) {
-  try {
-    const t = s?.__updatedAt;
-    const ms = t ? new Date(t).getTime() : 0;
-    return Number.isFinite(ms) ? ms : 0;
-  } catch {
-    return 0;
-  }
-}
 function persist() {
   state = normalizeState(state);
 
-  // atualiza carimbo local (para conflito)
+  // carimba local
   stampLocalUpdatedAt(state);
 
   // local sempre
   saveState(state);
 
-  // ✅ cloud
-  if (cloudUserId) {
-    scheduleSaveToCloud(state);
-  }
+  // cloud quando logado
+  if (cloudUserId) scheduleSaveToCloud(state);
 }
+
+/* =========================================================
+   ✅ CORE / ROUTER
+========================================================= */
 
 function syncThemeIcon(btnTheme) {
   const icon = btnTheme?.querySelector(".icon");
@@ -415,7 +386,7 @@ function render(route) {
   const root = qs("#viewRoot");
   if (!root) return;
 
-  // ✅ LOGIN SUPABASE (padrão)
+  // Supabase login screen
   if (state.auth.mode === "supabase") {
     if (!session) {
       renderSupabaseLogin(root);
@@ -423,7 +394,7 @@ function render(route) {
     }
   }
 
-  // ✅ PIN (opcional)
+  // PIN lock (opcional)
   if (state.auth.mode === "pin" && state.auth?.enabled && !state.auth?.unlocked && route !== "more") {
     renderPinLockScreen(root);
     return;
@@ -440,6 +411,59 @@ function render(route) {
 
   (routes[route] || routes.home)();
 }
+
+async function mount() {
+  // tema/marca
+  setTheme(state.theme || "dark");
+  setBrand(state.storeName || "");
+
+  const btnTheme = qs("#btnTheme");
+  syncThemeIcon(btnTheme);
+
+  btnTheme?.addEventListener("click", () => {
+    state.theme = state.theme === "light" ? "dark" : "light";
+    persist();
+    setTheme(state.theme);
+    syncThemeIcon(btnTheme);
+  });
+
+  window.addEventListener("hashchange", () => {
+    const r = (location.hash || "").replace("#", "").trim();
+    if (r) navigate(r, true);
+  });
+
+  qsa(".nav__item").forEach((btn) => {
+    btn.addEventListener("click", () => navigate(btn.dataset.route));
+  });
+
+  // carrega sessão + cloud se logado
+  await refreshSession();
+  cloudUserId = getUserId();
+
+  if (session?.user) {
+    await applyCloudAfterLogin();
+  }
+
+  const hashRoute = (location.hash || "").replace("#", "").trim();
+  navigate(hashRoute || state.route || "home", true);
+
+  // UX dinheiro global
+  bindGlobalMoneyUX();
+}
+
+/* =========================================================
+   ✅ AUTH LISTENER (UM SÓ)
+========================================================= */
+supabase.auth.onAuthStateChange(async (_event, sess) => {
+  session = sess || null;
+  cloudUserId = session?.user?.id || null;
+
+  if (session?.user) {
+    await applyCloudAfterLogin();
+  }
+
+  render(state.route || "home");
+});
 
 /* =========================================================
    SUPABASE LOGIN UI
@@ -519,50 +543,6 @@ function renderSupabaseLogin(root) {
     toast("Link de recuperação enviado ✅", "success");
   });
 }
-
-  qs("#btnLogin")?.addEventListener("click", async () => {
-    const email = (qs("#authEmail")?.value || "").trim();
-    const password = (qs("#authPass")?.value || "").trim();
-    if (!email || !password) return toast("Preencha e-mail e senha", "error");
-
-    const { error } = await supabase.auth.signInWithPassword({ email, password });
-    if (error) return toast(error.message, "error");
-
-    await refreshSession();
-    cloudUserId = getUserId();
-
-    await applyCloudAfterLogin();
-
-    toast("Logado ✅", "success");
-    render(state.route || "home");
-  });
-
-  qs("#btnSignup")?.addEventListener("click", async () => {
-    const email = (qs("#authEmail")?.value || "").trim();
-    const password = (qs("#authPass")?.value || "").trim();
-    if (!email || !password) return toast("Preencha e-mail e senha", "error");
-
-    const { error } = await supabase.auth.signUp({ email, password });
-    if (error) return toast(error.message, "error");
-
-    toast("Conta criada ✅ (confirme no e-mail se necessário)", "success");
-    await refreshSession();
-    cloudUserId = getUserId();
-
-    if (session) await applyCloudAfterLogin();
-
-    render(state.route || "home");
-  });
-
-  qs("#btnForgot")?.addEventListener("click", async () => {
-    const email = (qs("#authEmail")?.value || "").trim();
-    if (!email) return toast("Digite seu e-mail", "error");
-
-    const { error } = await supabase.auth.resetPasswordForEmail(email);
-    if (error) return toast(error.message, "error");
-    toast("Link de recuperação enviado ✅", "success");
-  });
-
 
 /* =========================================================
    PIN LOCK SCREEN (opcional)
@@ -726,10 +706,7 @@ function renderHome(root) {
   root.innerHTML = html;
 
   qs("#btnQuickSale")?.addEventListener("click", () => navigate("sale"));
-
-  qs("#btnCashOut")?.addEventListener("click", () => {
-    showCashOutModal(root);
-  });
+  qs("#btnCashOut")?.addEventListener("click", () => showCashOutModal(root));
 
   qs("#btnEditMeta")?.addEventListener("click", () => {
     const atual = Number(state.metaMensal || 0);
@@ -737,10 +714,8 @@ function renderHome(root) {
     if (v === null) return;
 
     const num = parseMoneyInput(v);
-    if (!Number.isFinite(num) || num < 0) {
-      toast("Valor inválido. Use um número como 3000.", "error");
-      return;
-    }
+    if (!Number.isFinite(num) || num < 0) return toast("Valor inválido. Use um número como 3000.", "error");
+
     state.mesRef = monthKey();
     state.metaMensal = num;
     persist();
@@ -764,10 +739,7 @@ function statCard(label, value, icon = "") {
 ========================================================= */
 function showCashOutModal(_root) {
   const container = qs("#modalContainer");
-  if (!container) {
-    toast("ModalContainer não encontrado (#modalContainer).", "error");
-    return;
-  }
+  if (!container) return toast("ModalContainer não encontrado (#modalContainer).", "error");
 
   const html = `
     <div class="modal">
@@ -911,16 +883,12 @@ function renderSale(root) {
 
       <div class="field mt-12">
         <div class="label">Desconto</div>
-        <input type="text" inputmode="decimal" class="input" id="inpDiscount" placeholder="0,00" value="${formatMoneyInput(
-          desconto
-        )}" />
+        <input type="text" inputmode="decimal" class="input" id="inpDiscount" placeholder="0,00" value="${formatMoneyInput(desconto)}" />
       </div>
 
       <div class="field mt-12">
         <div class="label">Acréscimo (entrega, etc)</div>
-        <input type="text" inputmode="decimal" class="input" id="inpExtra" placeholder="0,00" value="${formatMoneyInput(
-          acrescimo
-        )}" />
+        <input type="text" inputmode="decimal" class="input" id="inpExtra" placeholder="0,00" value="${formatMoneyInput(acrescimo)}" />
       </div>
 
       ${
@@ -928,9 +896,7 @@ function renderSale(root) {
           ? `
         <div class="field mt-12">
           <div class="label">Recebido em dinheiro</div>
-          <input type="text" inputmode="decimal" class="input" id="inpRecebido" placeholder="0,00" value="${formatMoneyInput(
-            recebido
-          )}" />
+          <input type="text" inputmode="decimal" class="input" id="inpRecebido" placeholder="0,00" value="${formatMoneyInput(recebido)}" />
         </div>
       `
           : ""
@@ -1041,10 +1007,7 @@ function renderSale(root) {
         return;
       }
 
-      if (t.closest?.("#btnFinalizeSale")) {
-        finalizeSale(root);
-        return;
-      }
+      if (t.closest?.("#btnFinalizeSale")) return finalizeSale(root);
 
       if (t.closest?.("#btnClearCart")) {
         state.ui.saleCart = {};
@@ -1177,18 +1140,12 @@ function finalizeSale(root) {
   const acrescimo = Number(state.ui.saleExtra || 0);
   const recebido = Number(state.ui.saleReceived || 0);
 
-  if (Object.keys(cart).length === 0) {
-    toast("Carrinho vazio!", "error");
-    return;
-  }
+  if (Object.keys(cart).length === 0) return toast("Carrinho vazio!", "error");
 
   const totals = computeCartTotals(cart, products, metodo, desconto, acrescimo);
   const falta = metodo === "dinheiro" ? Math.max(0, totals.totalFinal - recebido) : 0;
 
-  if (metodo === "dinheiro" && falta > 0) {
-    toast(`Falta receber ${brl(falta)}`, "error");
-    return;
-  }
+  if (metodo === "dinheiro" && falta > 0) return toast(`Falta receber ${brl(falta)}`, "error");
 
   const items = cartToItems(cart, products);
 
@@ -1251,10 +1208,7 @@ function renderProductAddRow(product, cart) {
 }
 
 /* =========================================================
-   ORDERS / PRODUCTS / REPORTS / MORE
-   ✅ A PARTIR DAQUI, mantive seu código original (sem mexer na lógica),
-   porque o foco principal aqui era estabilizar o cloud sync e o core.
-   (Seu arquivo já veio completo, então segue tudo abaixo igual.)
+   ORDERS / PRODUCTS / REPORTS / MORE (MESMA LÓGICA)
 ========================================================= */
 
 function renderOrders(root) {
@@ -1356,8 +1310,7 @@ function formatOrderDateLabel(order) {
   if (retirada) {
     try {
       const d = new Date(`${retirada}T00:00:00`);
-      const br = d.toLocaleDateString("pt-BR");
-      return `Retirada: ${br}`;
+      return `Retirada: ${d.toLocaleDateString("pt-BR")}`;
     } catch {
       return `Retirada: ${retirada}`;
     }
@@ -1374,16 +1327,12 @@ function markOrderDelivered(orderId, root) {
   if (idx < 0) return;
 
   const order = state.orders[idx];
-  if ((order.status || "aberta") !== "aberta") {
-    toast("Essa encomenda não está aberta.", "error");
-    return;
-  }
+  if ((order.status || "aberta") !== "aberta") return toast("Essa encomenda não está aberta.", "error");
 
   const total = Number(order.total || 0);
   const sinal = Number(order.sinal || 0);
   const restante = Math.max(0, total - sinal);
 
-  // segurança: não duplicar lançamentos
   if (order.entregaRegistrada === true) {
     state.orders[idx] = { ...order, status: "entregue" };
     persist();
@@ -1399,7 +1348,6 @@ function markOrderDelivered(orderId, root) {
   );
   if (!ok) return;
 
-  // 1) registra no caixa o restante (se houver)
   if (restante > 0) {
     const tipo =
       order.metodoRestante === "dinheiro" ? "dinheiro" : order.metodoRestante === "cartao" ? "cartao" : "pix";
@@ -1413,7 +1361,6 @@ function markOrderDelivered(orderId, root) {
     });
   }
 
-  // 2) registra a venda (1x) para relatórios/lucro
   state.sales.push({
     id: newId(),
     date: todayKey(),
@@ -1431,7 +1378,6 @@ function markOrderDelivered(orderId, root) {
     ref: { type: "order", orderId: order.id },
   });
 
-  // 3) atualiza encomenda
   state.orders[idx] = {
     ...order,
     status: "entregue",
@@ -1445,7 +1391,7 @@ function markOrderDelivered(orderId, root) {
 }
 
 /* =========================================================
-   (RESTO DO SEU ARQUIVO) — segue igual
+   MODAL ENCOMENDA (MESMA LÓGICA)
 ========================================================= */
 
 function showOrderModal(orderId, root) {
@@ -1455,10 +1401,8 @@ function showOrderModal(orderId, root) {
 
   const key = draftKeyForOrder(orderId);
 
-  // ✅ rascunho do formulário (pra não apagar ao clicar +)
   const draft = getOrderDraft(orderId, order);
 
-  // ✅ itens por key (new / edit:<id>)
   const itemsBox =
     state.ui.orderDraftItems && typeof state.ui.orderDraftItems === "object" ? state.ui.orderDraftItems : {};
   const itemsById = {
@@ -1805,7 +1749,7 @@ function renderOrderProductRow(product, itemsById) {
 }
 
 /* =========================================================
-   PRODUCTS / REPORTS / MORE
+   PRODUCTS
 ========================================================= */
 
 function renderProducts(root) {
@@ -1998,6 +1942,9 @@ function showProductModal(productId, root) {
   });
 }
 
+/* =========================================================
+   REPORTS
+========================================================= */
 function renderReports(root) {
   const sales = state.sales || [];
   const orders = state.orders || [];
@@ -2100,6 +2047,9 @@ function renderReports(root) {
   root.innerHTML = html;
 }
 
+/* =========================================================
+   MORE
+========================================================= */
 function renderMore(root) {
   const isAuthOn = !!state.auth?.enabled;
 
@@ -2213,10 +2163,7 @@ function renderMore(root) {
     const enable = !(state.auth?.enabled === true);
 
     if (enable) {
-      if (!state.auth.pin) {
-        toast("Defina um PIN antes de ativar.", "error");
-        return;
-      }
+      if (!state.auth.pin) return toast("Defina um PIN antes de ativar.", "error");
       state.auth.enabled = true;
       state.auth.unlocked = true;
       persist();
@@ -2237,10 +2184,7 @@ function renderMore(root) {
   qs("#btnSavePin")?.addEventListener("click", () => {
     const pin = String(qs("#inpPinSet")?.value || "").trim();
     const onlyDigits = pin.replace(/\D/g, "");
-    if (onlyDigits.length < 4 || onlyDigits.length > 8) {
-      toast("PIN inválido. Use 4 a 8 números.", "error");
-      return;
-    }
+    if (onlyDigits.length < 4 || onlyDigits.length > 8) return toast("PIN inválido. Use 4 a 8 números.", "error");
     state.auth.pin = onlyDigits;
     persist();
     toast("PIN salvo ✅", "success");
@@ -2273,13 +2217,8 @@ function renderMore(root) {
 }
 
 /* =========================================================
-   /* =========================================================
-   HELPERS
+   DRAFT HELPERS (ENCOMENDAS)
 ========================================================= */
-
-// ---------------------------------
-// Draft helpers (encomendas)
-// ---------------------------------
 function draftKeyForOrder(orderId) {
   return orderId ? `edit:${orderId}` : "new";
 }
@@ -2321,11 +2260,9 @@ function clearOrderDraft(orderId) {
   persist();
 }
 
-// ---------------------------------
-// Money UX helpers
-// ---------------------------------
-
-// ✅ UX: ao focar em campos de dinheiro por ID, se for "0,00" limpa; senão seleciona tudo
+/* =========================================================
+   MONEY UX
+========================================================= */
 function bindMoneyInputClearOnFocus(root, ids = []) {
   ids.forEach((id) => {
     const el = root.querySelector(`#${id}`);
@@ -2335,19 +2272,16 @@ function bindMoneyInputClearOnFocus(root, ids = []) {
       const raw = String(el.value || "").trim();
       const v = parseMoneyInput(raw);
 
-      // limpa 0 / 0,00 / vazio
       if (!raw || raw === "0" || raw === "0,0" || raw === "0,00" || v === 0) {
         el.value = "";
         return;
       }
 
-      // se tem valor, seleciona tudo
       try {
         el.select();
       } catch {}
     });
 
-    // se sair e ficar vazio, volta 0,00
     el.addEventListener("blur", () => {
       const raw = String(el.value || "").trim();
       if (!raw) el.value = "0,00";
@@ -2355,28 +2289,18 @@ function bindMoneyInputClearOnFocus(root, ids = []) {
   });
 }
 
-/* =========================================================
-   ✅ UX GLOBAL — 0,00 some ao clicar em QUALQUER campo de dinheiro
-   - pega inputs com inputmode="decimal" ou placeholder "0,00" ou type="number"
-   - não precisa passar IDs
-   - evita registrar 2 vezes
-========================================================= */
 function bindGlobalMoneyUX() {
   const isMoneyInput = (el) => {
     if (!(el instanceof HTMLInputElement)) return false;
-
     const inputmode = (el.getAttribute("inputmode") || "").toLowerCase();
     const placeholder = String(el.getAttribute("placeholder") || "").trim();
     const type = (el.getAttribute("type") || "").toLowerCase();
-
     return inputmode === "decimal" || placeholder === "0,00" || type === "number";
   };
 
-  // ✅ evita duplicar
   if (window.__dlMoneyUXBound) return;
   window.__dlMoneyUXBound = true;
 
-  // ao focar: limpa zero; se não for zero, seleciona tudo
   document.addEventListener("focusin", (e) => {
     const el = e.target;
     if (!isMoneyInput(el)) return;
@@ -2394,7 +2318,6 @@ function bindGlobalMoneyUX() {
     } catch {}
   });
 
-  // ao sair: se ficou vazio, volta 0,00
   document.addEventListener("focusout", (e) => {
     const el = e.target;
     if (!isMoneyInput(el)) return;
@@ -2403,6 +2326,10 @@ function bindGlobalMoneyUX() {
     if (!raw) el.value = "0,00";
   });
 }
+
+/* =========================================================
+   HELPERS
+========================================================= */
 
 function radioPill(_name, value, label, checked) {
   return `
@@ -2622,52 +2549,20 @@ function toast(message, type = "info") {
   }, 3000);
 }
 
-function seedDemo() {
-  state.products = [
-    { id: newId(), nome: "Bolo no pote", preco: 25, custo: 8 },
-    { id: newId(), nome: "Brigadeiro (pote)", preco: 15, custo: 4 },
-    { id: newId(), nome: "Pavê", preco: 35, custo: 12 },
-    { id: newId(), nome: "Cupcake", preco: 8, custo: 2.5 },
-  ];
-
-  const today = todayKey();
-  state.sales = [
-    {
-      id: newId(),
-      date: today,
-      createdAt: new Date().toISOString(),
-      metodo: "pix",
-      items: [{ nome: "Bolo no pote", preco: 25, custo: 8, qty: 2, unitPrice: 25, unitCost: 8 }],
-      desconto: 0,
-      acrescimo: 0,
-      recebido: 0,
-      troco: 0,
-      totalVenda: 50,
-      totalCusto: 16,
-      taxaCartao: 0,
-      lucro: 34,
-    },
-  ];
-
-  persist();
-}
-
-// start
+/* =========================================================
+   START
+========================================================= */
 mount();
-// =========================================================
-// PWA / SERVICE WORKER — Vercel safe + iOS safe (FIX CACHE STUCK)
-// - registra com base path correto
-// - força update de verdade
-// - remove SW antigo fora do escopo
-// - recarrega quando novo SW assumir
-// =========================================================
+
+/* =========================================================
+   PWA / SERVICE WORKER — Vercel safe + iOS safe (FIX CACHE STUCK)
+========================================================= */
 if ("serviceWorker" in navigator) {
   window.addEventListener("load", async () => {
     try {
       const base = new URL("./", window.location.href);
       const swUrl = new URL("sw.js", base).toString();
 
-      // ✅ remove registros antigos que não batem com o swUrl atual (iOS gruda muito)
       try {
         const regs = await navigator.serviceWorker.getRegistrations();
         await Promise.all(
@@ -2682,7 +2577,6 @@ if ("serviceWorker" in navigator) {
 
       const reg = await navigator.serviceWorker.register(swUrl, { updateViaCache: "none" });
 
-      // ✅ recarrega quando o novo SW assumir controle
       let refreshing = false;
       navigator.serviceWorker.addEventListener("controllerchange", () => {
         if (refreshing) return;
@@ -2690,24 +2584,18 @@ if ("serviceWorker" in navigator) {
         window.location.reload();
       });
 
-      // ✅ força checagem imediata
       try {
         await reg.update();
       } catch {}
 
-      // ✅ se já existe SW esperando, ativa agora
-      if (reg.waiting) {
-        reg.waiting.postMessage({ type: "SKIP_WAITING" });
-      }
+      if (reg.waiting) reg.waiting.postMessage({ type: "SKIP_WAITING" });
 
-      // ✅ detecta updates e ativa automaticamente
       reg.addEventListener("updatefound", () => {
         const newWorker = reg.installing;
         if (!newWorker) return;
 
         newWorker.addEventListener("statechange", () => {
           if (newWorker.state === "installed") {
-            // se já havia controller, isso é update
             if (navigator.serviceWorker.controller) {
               newWorker.postMessage({ type: "SKIP_WAITING" });
             }
@@ -2715,9 +2603,10 @@ if ("serviceWorker" in navigator) {
         });
       });
 
-      // ✅ extra: ping de update alguns segundos depois (iOS às vezes falha na 1ª)
       setTimeout(() => {
-        try { reg.update(); } catch {}
+        try {
+          reg.update();
+        } catch {}
       }, 4000);
 
       console.log("✅ SW registrado:", swUrl);
