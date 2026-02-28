@@ -10,7 +10,7 @@ let session = null;
    ✅ CLOUD SYNC (Supabase) — robusto, sem duplicações
    - Carrega do cloud ao logar
    - Salva no cloud com debounce
-   - Resolve conflito via updated_at
+   - Resolve conflito via updated_at (usa __updatedAt local)
    - Nunca “zera” seu app se o cloud vier vazio
 ========================================================= */
 let cloudUserId = null;
@@ -27,19 +27,10 @@ function stableHash(obj) {
   }
 }
 
-async function getUser() {
-  const { data, error } = await supabase.auth.getUser();
-  if (error) return null;
-  return data?.user || null;
-}
-
-function getUserId() {
-  return session?.user?.id || cloudUserId || null;
-}
-
 async function refreshSession() {
   try {
-    const { data } = await supabase.auth.getSession();
+    const { data, error } = await supabase.auth.getSession();
+    if (error) throw error;
     session = data?.session || null;
     cloudUserId = session?.user?.id || null;
   } catch {
@@ -48,8 +39,20 @@ async function refreshSession() {
   }
 }
 
+async function getUser() {
+  // garante que session/cloudUserId estão atualizados
+  await refreshSession();
+
+  try {
+    const { data, error } = await supabase.auth.getUser();
+    if (error) return null;
+    return data?.user || null;
+  } catch {
+    return null;
+  }
+}
+
 function getLocalUpdatedAt(s) {
-  // tolerante: se não existir, retorna 0
   const t = s?.__updatedAt;
   const ms = t ? new Date(t).getTime() : 0;
   return Number.isFinite(ms) ? ms : 0;
@@ -62,31 +65,39 @@ function stampLocalUpdatedAt(s) {
 
 function mergePreferNewer(localState, cloudState) {
   // Se cloud vier vazio/sem estrutura, não destrói local
-  const cloudOk = cloudState && typeof cloudState === "object" && (cloudState.products || cloudState.sales || cloudState.orders || cloudState.cashMoves);
+  const cloudOk =
+    cloudState &&
+    typeof cloudState === "object" &&
+    (cloudState.products || cloudState.sales || cloudState.orders || cloudState.cashMoves);
+
   if (!cloudOk) return localState;
 
   // Preferir o que for “mais novo”
   const l = getLocalUpdatedAt(localState);
   const c = getLocalUpdatedAt(cloudState);
-  if (c > l) return cloudState;
-  return localState;
+  return c > l ? cloudState : localState;
 }
 
 async function ensureCloudRow(userId, seedState) {
-  // cria registro se não existir (sem depender de erro 406/116 que varia)
-  const { data: existing, error: selErr } = await supabase
-    .from("user_state")
-    .select("user_id")
-    .eq("user_id", userId)
-    .maybeSingle();
-
-  if (selErr) return; // se deu erro, deixa pra lá (local continua)
-
-  if (!existing) {
-    const payload = stampLocalUpdatedAt(normalizeState(seedState));
-    await supabase
+  try {
+    const { data: existing, error: selErr } = await supabase
       .from("user_state")
-      .insert({ user_id: userId, data: payload, updated_at: new Date().toISOString() });
+      .select("user_id")
+      .eq("user_id", userId)
+      .maybeSingle();
+
+    if (selErr) return;
+
+    if (!existing) {
+      const payload = stampLocalUpdatedAt(normalizeState(seedState));
+      await supabase.from("user_state").insert({
+        user_id: userId,
+        data: payload,
+        updated_at: new Date().toISOString(),
+      });
+    }
+  } catch {
+    // Se falhar (RLS, tabela, etc), local continua funcionando
   }
 }
 
@@ -98,39 +109,49 @@ async function loadStateFromCloud(localState) {
 
   await ensureCloudRow(u.id, localState);
 
-  const { data, error } = await supabase
-    .from("user_state")
-    .select("data, updated_at")
-    .eq("user_id", u.id)
-    .maybeSingle();
+  try {
+    const { data, error } = await supabase
+      .from("user_state")
+      .select("data, updated_at")
+      .eq("user_id", u.id)
+      .maybeSingle();
 
-  if (error) {
-    console.warn("Erro ao carregar cloud state:", error);
+    if (error) {
+      console.warn("Erro ao carregar cloud state:", error);
+      return { state: localState };
+    }
+
+    const cloudState = data?.data ?? null;
+
+    // merge inteligente (não perde local se cloud vier vazio)
+    const merged = mergePreferNewer(localState, cloudState || localState);
+
+    // hash do estado “real” (sem forçar novo __updatedAt agora)
+    lastSavedHash = stableHash(normalizeState(merged));
+    return { state: merged };
+  } catch (e) {
+    console.warn("Erro inesperado ao carregar cloud state:", e);
     return { state: localState };
   }
-
-  const cloudState = data?.data ?? null;
-
-  // merge inteligente (não perde local se cloud vier vazio)
-  const merged = mergePreferNewer(localState, cloudState || localState);
-
-  lastSavedHash = stableHash(merged);
-  return { state: merged };
 }
 
 function scheduleSaveToCloud(currentState, debounceMs = 700) {
   if (!cloudUserId) return;
-  if (isApplyingCloud) return; // evita loop durante applyCloudAfterLogin
+  if (isApplyingCloud) return;
 
-  const normalized = stampLocalUpdatedAt(normalizeState(currentState));
-
-  const h = stableHash(normalized);
-  if (h === lastSavedHash) return;
+  // ✅ IMPORTANTÍSSIMO:
+  // compara hash SEM mudar __updatedAt agora, senão vira loop infinito
+  const base = normalizeState(currentState);
+  const baseHash = stableHash(base);
+  if (baseHash === lastSavedHash) return;
 
   if (saveTimer) clearTimeout(saveTimer);
 
   saveTimer = setTimeout(async () => {
     try {
+      // Só carimba __updatedAt quando realmente for salvar
+      const normalized = stampLocalUpdatedAt(normalizeState(currentState));
+
       const { error } = await supabase
         .from("user_state")
         .upsert(
@@ -143,7 +164,8 @@ function scheduleSaveToCloud(currentState, debounceMs = 700) {
         return;
       }
 
-      lastSavedHash = h;
+      // depois de salvar, atualiza o hash baseado no estado salvo (já com __updatedAt)
+      lastSavedHash = stableHash(normalized);
     } catch (e) {
       console.warn("Erro inesperado ao salvar cloud state:", e);
     }
@@ -152,19 +174,23 @@ function scheduleSaveToCloud(currentState, debounceMs = 700) {
 
 async function applyCloudAfterLogin() {
   isApplyingCloud = true;
-  const loaded = await loadStateFromCloud(state);
-  state = normalizeState(loaded.state);
+  try {
+    const loaded = await loadStateFromCloud(state);
+    state = normalizeState(loaded.state);
 
-  // mantém local igual ao “melhor” (merge)
-  saveState(state);
+    // mantém local igual ao “melhor” (merge)
+    saveState(state);
 
-  // aplica UI
-  setTheme(state.theme || "dark");
-  setBrand(state.storeName || "");
-  const btnTheme = qs("#btnTheme");
-  syncThemeIcon(btnTheme);
-
-  isApplyingCloud = false;
+    // aplica UI
+    setTheme(state.theme || "dark");
+    setBrand(state.storeName || "");
+    const btnTheme = qs("#btnTheme");
+    syncThemeIcon(btnTheme);
+  } catch (e) {
+    console.warn("Erro no applyCloudAfterLogin:", e);
+  } finally {
+    isApplyingCloud = false;
+  }
 }
 
 /* =========================================================
