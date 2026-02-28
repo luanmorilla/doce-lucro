@@ -128,7 +128,6 @@ async function doSignup(email, password) {
 ========================================================= */
 supabase.auth.onAuthStateChange(async (event, sess) => {
   console.log("AUTH EVENT:", event);
-
   session = sess || null;
   cloudUserId = session?.user?.id || null;
 
