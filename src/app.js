@@ -5,10 +5,12 @@ import { supabase } from "./supabase.js";
 
 let state = normalizeState(loadState());
 let session = null;
+let cloudUserId = null;
+let isApplyingCloud = false;
 // =========================================================
 // ✅ AUTH/SESSION GLOBALS (FIX)
 // =========================================================
-let cloudUserId = null;
+l
 
 // sempre retorna o userId atual (session ou cloud)
 function getUserId() {
