@@ -10,7 +10,6 @@ let isApplyingCloud = false;
 // =========================================================
 // ✅ AUTH/SESSION GLOBALS (FIX)
 // =========================================================
-l
 
 // sempre retorna o userId atual (session ou cloud)
 function getUserId() {
