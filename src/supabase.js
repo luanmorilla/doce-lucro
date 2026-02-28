@@ -8,9 +8,9 @@ import { createClient } from "https://cdn.jsdelivr.net/npm/@supabase/supabase-js
    - Pronto pra SaaS (multi-device)
 ========================================================= */
 
-// ✅ Ideal: depois a gente move isso para um env.js (sem bundler) ou Vercel Env (se virar build)
 const SUPABASE_URL = "https://fxiaxmyiqzmmqixlkhen.supabase.co";
-const SUPABASE_ANON_KEY = "sb_publishable_ByvFyYzpUfJfJf1RppomWm4A_LmmBV3sR";
+const SUPABASE_ANON_KEY =
+  "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImZ4aWF4bXlpcXptbXFpeGxraGVuIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzE4ODc5MzMsImV4cCI6MjA4NzQ2MzkzM30.BWWKiZfAdlDuVOTJJV8B17YJyhpjEIj0E_EHobfZdmI";
 
 // ✅ Storage robusto (alguns navegadores / modos privativos podem falhar)
 function getSafeStorage() {

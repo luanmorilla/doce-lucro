@@ -284,8 +284,6 @@ navigate(hashRoute || state.route || "home", true);
 
 // ✅ ativa UX global de dinheiro (0,00 some ao focar)
 bindGlobalMoneyUX();
-
-registerSW();
 }
 
 function normalizeState(s) {
