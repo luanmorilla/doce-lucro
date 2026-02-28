@@ -1,30 +1,27 @@
 /* =========================================================
-   SERVICE WORKER — Doce Lucro (PWA Offline / Updates Safe)
-   - App Shell precache
-   - Navigation fallback to index.html
-   - Network-first for critical files (avoid stale app)
-   - Cache-first for static assets
-   - Safer update flow: VERSION bump + SKIP_WAITING message
-   ✅ Works with ?v=1 (ignoreSearch)
-   ✅ Vercel-safe: evita cache de redirects/404
+   SERVICE WORKER — Doce Lucro (PWA Offline / Updates Safe) — FIXED
+   - App Shell precache (sem redirect)
+   - Navigation: network-first + fallback index.html (não cacheia por URL)
+   - Critical files: network-first (evita versão antiga)
+   - Static assets: cache-first
+   - Safer update flow: VERSION bump + SKIP_WAITING
 ========================================================= */
 
-const VERSION = "v1.0.3"; // ✅ BUMP SEMPRE que publicar update
+const VERSION = "v1.0.4"; // ✅ BUMP SEMPRE que publicar update
 const PREFIX = "doce-lucro";
 const PRECACHE = `${PREFIX}-precache-${VERSION}`;
 const RUNTIME = `${PREFIX}-runtime-${VERSION}`;
 
-/** URL absoluta respeitando o scope (subpasta, preview, vercel) */
+/** URL absoluta respeitando scope (subpasta/preview/vercel) */
 function u(path) {
   return new URL(path, self.registration.scope).toString();
 }
 
-/** App Shell (essencial pro app abrir offline) */
+/** App Shell essencial (sem "./" para evitar redirect) */
 const APP_SHELL = [
-  u("./"),
   u("./index.html"),
 
-  // CSS (com e sem query)
+  // CSS
   u("./styles/styles.css"),
   u("./styles/styles.css?v=1"),
 
@@ -47,10 +44,13 @@ self.addEventListener("install", (event) => {
     (async () => {
       const cache = await caches.open(PRECACHE);
 
-      // addAll falha inteiro se 1 falhar; então fazemos add individual
       for (const url of APP_SHELL) {
         try {
-          await cache.add(url);
+          // evita cache de redirects/erros durante precache
+          const res = await fetch(url, { cache: "no-store" });
+          if (res && res.status >= 200 && res.status < 300 && !res.redirected) {
+            await cache.put(url, res.clone());
+          }
         } catch (e) {
           console.warn("[SW] Falha ao precache:", url, e);
         }
@@ -67,7 +67,6 @@ self.addEventListener("install", (event) => {
 self.addEventListener("activate", (event) => {
   event.waitUntil(
     (async () => {
-      // 🔒 Limpa apenas caches do Doce Lucro (não mexe em outros)
       const keys = await caches.keys();
       await Promise.all(
         keys.map((key) => {
@@ -77,7 +76,6 @@ self.addEventListener("activate", (event) => {
         })
       );
 
-      // ✅ Navigation preload (acelera network-first)
       if (self.registration.navigationPreload) {
         try {
           await self.registration.navigationPreload.enable();
@@ -120,12 +118,9 @@ function isStaticAsset(url) {
   );
 }
 
-/**
- * Arquivos críticos: sempre tentar pegar o mais novo (network-first).
- * Usa pathname -> funciona com ?v=1
- */
 function isCritical(url) {
   const p = url.pathname;
+  // ⚠️ NÃO inclui sw.js (pra não atrapalhar update)
   return (
     p.endsWith("/index.html") ||
     p.endsWith("/styles/styles.css") ||
@@ -134,8 +129,7 @@ function isCritical(url) {
     p.endsWith("/src/state.js") ||
     p.endsWith("/src/db.js") ||
     p.endsWith("/src/supabase.js") ||
-    p.endsWith("/manifest.webmanifest") ||
-    p.endsWith("/sw.js")
+    p.endsWith("/manifest.webmanifest")
   );
 }
 
@@ -152,21 +146,15 @@ async function matchAny(requestOrUrl) {
 
 /**
  * Cache PUT seguro:
- * - só guarda responses OK (200-299)
- * - evita cache de redirects (muito comum em deploy/rotas na Vercel)
- * - evita opaque/cross-origin
+ * - só guarda OK
+ * - evita redirect
+ * - evita opaque
  */
 async function cachePutSafe(cacheName, request, response) {
   try {
     if (!response) return;
-
-    // só cacheia OK
     if (!(response.status >= 200 && response.status < 300)) return;
-
-    // evita cache de redirect (pode “prender” versão errada)
     if (response.redirected) return;
-
-    // não cachear opaque
     if (response.type === "opaque") return;
 
     const cache = await caches.open(cacheName);
@@ -183,31 +171,30 @@ self.addEventListener("fetch", (event) => {
 
   const url = new URL(request.url);
 
-  // Só intercepta requests dentro do scope (mesmo origin + path do scope)
+  // Só dentro do scope
   const scopeUrl = new URL(self.registration.scope);
   const inScope = url.origin === scopeUrl.origin && url.pathname.startsWith(scopeUrl.pathname);
   if (!inScope) return;
 
-  // ✅ NAVIGATION: network-first + fallback index.html
+  // ✅ NÃO intercepta o próprio sw.js (evita update travar)
+  if (url.pathname.endsWith("/sw.js")) {
+    event.respondWith(fetch(request, { cache: "no-store" }));
+    return;
+  }
+
+  // ✅ NAVIGATION: network-first + fallback index.html (NÃO cacheia por URL de rota)
   if (isNavigationRequest(request)) {
     event.respondWith(
       (async () => {
         try {
           const preloaded = await event.preloadResponse;
-          if (preloaded) {
-            await cachePutSafe(RUNTIME, request, preloaded);
-            return preloaded;
-          }
+          if (preloaded) return preloaded;
 
+          // pega sempre o HTML mais novo
           const fresh = await fetch(request, { cache: "no-store" });
-          await cachePutSafe(RUNTIME, request, fresh);
           return fresh;
         } catch (_) {
-          // tenta cache do próprio request
-          const cachedNav = await matchAny(request);
-          if (cachedNav) return cachedNav;
-
-          // fallback pro shell (index.html), ignorando query
+          // fallback pro shell (index.html)
           const cachedShell = await matchAny(u("./index.html"));
           if (cachedShell) return cachedShell;
 
@@ -221,7 +208,7 @@ self.addEventListener("fetch", (event) => {
     return;
   }
 
-  // ✅ CRITICAL: network-first (não ficar preso em versão antiga)
+  // ✅ CRITICAL: network-first (e cacheia a versão boa)
   if (isCritical(url)) {
     event.respondWith(
       (async () => {

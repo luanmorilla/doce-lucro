@@ -2612,32 +2612,37 @@ function seedDemo() {
   persist();
 }
 
-function registerSW() {
-  // Durante DEV (Live Server), não registra service worker pra não cachear arquivos
-  if (location.hostname === "127.0.0.1" || location.hostname === "localhost") return;
-
-  if ("serviceWorker" in navigator) {
-    navigator.serviceWorker.register("./sw.js").catch(() => {});
-  }
-}
-
 // start
 mount();
 // =========================================================
-// PWA / SERVICE WORKER — Vercel safe + iOS safe
-// - register com base path correto (preview/subpasta)
-// - auto update + reload quando novo SW assumir
+// PWA / SERVICE WORKER — Vercel safe + iOS safe (FIX CACHE STUCK)
+// - registra com base path correto
+// - força update de verdade
+// - remove SW antigo fora do escopo
+// - recarrega quando novo SW assumir
 // =========================================================
 if ("serviceWorker" in navigator) {
   window.addEventListener("load", async () => {
     try {
-      // ✅ base path seguro (funciona em /, preview, subpasta)
       const base = new URL("./", window.location.href);
       const swUrl = new URL("sw.js", base).toString();
 
-      const reg = await navigator.serviceWorker.register(swUrl);
+      // ✅ remove registros antigos que não batem com o swUrl atual (iOS gruda muito)
+      try {
+        const regs = await navigator.serviceWorker.getRegistrations();
+        await Promise.all(
+          regs.map(async (r) => {
+            const activeUrl = r?.active?.scriptURL || r?.installing?.scriptURL || r?.waiting?.scriptURL || "";
+            if (activeUrl && activeUrl !== swUrl) {
+              await r.unregister();
+            }
+          })
+        );
+      } catch {}
 
-      // ✅ Quando o novo SW assumir controle, recarrega e pega a versão nova
+      const reg = await navigator.serviceWorker.register(swUrl, { updateViaCache: "none" });
+
+      // ✅ recarrega quando o novo SW assumir controle
       let refreshing = false;
       navigator.serviceWorker.addEventListener("controllerchange", () => {
         if (refreshing) return;
@@ -2645,25 +2650,35 @@ if ("serviceWorker" in navigator) {
         window.location.reload();
       });
 
-      // ✅ Detecta update automaticamente
+      // ✅ força checagem imediata
+      try {
+        await reg.update();
+      } catch {}
+
+      // ✅ se já existe SW esperando, ativa agora
+      if (reg.waiting) {
+        reg.waiting.postMessage({ type: "SKIP_WAITING" });
+      }
+
+      // ✅ detecta updates e ativa automaticamente
       reg.addEventListener("updatefound", () => {
         const newWorker = reg.installing;
         if (!newWorker) return;
 
         newWorker.addEventListener("statechange", () => {
-          // novo SW instalado
           if (newWorker.state === "installed") {
-            // se já existe controller, é update (não é primeiro install)
+            // se já havia controller, isso é update
             if (navigator.serviceWorker.controller) {
-              // força ativação imediata
               newWorker.postMessage({ type: "SKIP_WAITING" });
             }
           }
         });
       });
 
-      // ✅ opcional: checa update ao abrir o app (bom pra produção)
-      try { reg.update(); } catch {}
+      // ✅ extra: ping de update alguns segundos depois (iOS às vezes falha na 1ª)
+      setTimeout(() => {
+        try { reg.update(); } catch {}
+      }, 4000);
 
       console.log("✅ SW registrado:", swUrl);
     } catch (err) {
