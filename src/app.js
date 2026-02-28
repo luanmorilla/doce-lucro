@@ -355,7 +355,27 @@ function normalizeState(s) {
  * ✅ Persistência local + cloud (quando logado)
  * - Local sempre (offline)
  * - Cloud se tiver session (sincroniza entre navegadores)
- */
+ */// =========================================================
+// ✅ UPDATED_AT helpers (FIX) — evita crash no persist()
+// =========================================================
+function stampLocalUpdatedAt(s) {
+  try {
+    if (s && typeof s === "object") {
+      s.__updatedAt = new Date().toISOString();
+    }
+  } catch {}
+  return s;
+}
+
+function getLocalUpdatedAt(s) {
+  try {
+    const t = s?.__updatedAt;
+    const ms = t ? new Date(t).getTime() : 0;
+    return Number.isFinite(ms) ? ms : 0;
+  } catch {
+    return 0;
+  }
+}
 function persist() {
   state = normalizeState(state);
 
