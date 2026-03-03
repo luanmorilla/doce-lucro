@@ -1,0 +1,158 @@
+/* =========================================================
+   NAV — SaaS Dock (Premium) + iOS Safe Area FIX
+========================================================= */
+.nav {
+    position: fixed;
+    left: 50%;
+    transform: translateX(-50%);
+    bottom: calc(var(--safeBottom) + var(--nav-gap));
+    width: min(var(--maxw), calc(100% - 20px));
+    min-height: var(--nav-h);
+  
+    padding: 10px 10px;
+    display: flex;
+    gap: 8px;
+    justify-content: space-between;
+  
+    border-radius: 26px;
+  
+    background: rgba(0, 0, 0, 0.58);
+    border: 1px solid rgba(255, 255, 255, 0.10);
+  
+    box-shadow:
+      0 18px 55px rgba(0, 0, 0, 0.55),
+      0 0 0 1px rgba(255, 255, 255, 0.04) inset;
+  
+    z-index: 60;
+  
+    /* ✅ evita “cortar” no iPhone */
+    padding-bottom: calc(10px + env(safe-area-inset-bottom, 0px));
+  }
+  
+  @supports ((backdrop-filter: blur(22px)) or (-webkit-backdrop-filter: blur(22px))) {
+    .nav {
+      backdrop-filter: blur(22px);
+      -webkit-backdrop-filter: blur(22px);
+    }
+  }
+  
+  :root[data-theme="light"] .nav {
+    background: rgba(255, 255, 255, 0.92);
+    border: 1px solid rgba(0, 0, 0, 0.08);
+    box-shadow:
+      0 14px 44px rgba(0, 0, 0, 0.12),
+      0 0 0 1px rgba(0, 0, 0, 0.03) inset;
+  }
+  
+  .nav__item {
+    position: relative;
+    flex: 1;
+    border: 1px solid transparent;
+    background: transparent;
+    color: var(--muted);
+  
+    border-radius: 18px;
+    padding: 10px 8px;
+  
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+  
+    cursor: pointer;
+    transition: var(--transition);
+    font-size: 11px;
+    min-height: 56px;
+  
+    transform: translateZ(0);
+    will-change: transform;
+    touch-action: manipulation;
+  }
+  
+  @media (hover:hover) and (pointer:fine) {
+    .nav__item:hover { background: rgba(255, 255, 255, 0.06); }
+    :root[data-theme="light"] .nav__item:hover { background: rgba(0, 0, 0, 0.04); }
+  }
+  
+  .nav__item:active { transform: scale(0.985); }
+  
+  .nav__icon {
+    font-size: 18px;
+    line-height: 1;
+    transform: translateY(0);
+    transition: var(--transition);
+  }
+  
+  .nav__label {
+    font-size: 11px;
+    font-weight: 950;
+    letter-spacing: -0.1px;
+    line-height: 1.1;
+    transition: var(--transition);
+  }
+  
+  @media (max-width: 380px) {
+    .nav__label { font-size: 10px; }
+    .nav__item { padding: 9px 6px; }
+  }
+  
+  /* estado ativo */
+  .nav__item.is-active {
+    color: var(--text);
+    border-color: transparent;
+  
+    background: linear-gradient(
+      180deg,
+      rgba(255, 255, 255, 0.14),
+      rgba(255, 255, 255, 0.08)
+    );
+  
+    box-shadow:
+      0 10px 28px rgba(0, 0, 0, 0.35),
+      0 0 0 1px rgba(255, 255, 255, 0.08) inset;
+  }
+  
+  :root[data-theme="light"] .nav__item.is-active {
+    background: linear-gradient(
+      180deg,
+      rgba(0, 0, 0, 0.06),
+      rgba(0, 0, 0, 0.03)
+    );
+    box-shadow:
+      0 10px 22px rgba(0, 0, 0, 0.10),
+      0 0 0 1px rgba(0, 0, 0, 0.05) inset;
+  }
+  
+  .nav__item.is-active .nav__icon {
+    transform: translateY(-1px) scale(1.03);
+  }
+  
+  .nav__item.is-active::after {
+    content: "";
+    position: absolute;
+    left: 50%;
+    bottom: 6px;
+    transform: translateX(-50%);
+    width: 22px;
+    height: 4px;
+    border-radius: 999px;
+    background: linear-gradient(90deg, rgba(255, 79, 163, 0.98), rgba(124, 92, 255, 0.98));
+    box-shadow:
+      0 10px 26px rgba(255, 79, 163, 0.18),
+      0 10px 26px rgba(124, 92, 255, 0.16);
+    opacity: 0.95;
+  }
+  
+  @media (max-width: 360px) {
+    .nav__item.is-active::after { width: 18px; }
+  }
+  
+  .nav__item:focus-visible { box-shadow: var(--ring); }
+  
+  /* ✅ toque mais limpo no iPhone */
+  @supports (-webkit-touch-callout: none) {
+    .btn, .pill, .nav__item, .iconbtn, .qbtn {
+      -webkit-tap-highlight-color: transparent;
+    }
+  }

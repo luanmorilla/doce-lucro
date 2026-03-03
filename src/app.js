@@ -1,147 +1,212 @@
-import { loadState, saveState, getDefaultState, newId } from "./state.js";
+import { newId } from "./state.js";
 import { brl, qs, qsa, setTheme, setBrand } from "./ui.js";
 import { calcCardFee, calcProfit, calcMargin, calcROI } from "./db.js";
 import { supabase } from "./supabase.js";
 
+// ✅ Store central (fonte da verdade)
+import { getState, setState, persist } from "./core/store.js";
+
+// ✅ Cloud (módulo único)
+import {
+  refreshSession,
+  getUserId,
+  applyCloudAfterLogin,
+  bindAuthListener,
+  bindCloudSaveHook,
+  unbindCloudSaveHook,
+} from "./features/cloud/cloud.js";
+
+// ✅ Products separado (página oficial)
+import { renderProducts as renderProductsPage } from "./features/products/products.page.js";
+
+// ✅ Helpers compartilhados (NÃO re-declarar no app.js)
+import { toast, escapeHtml, parseMoneyInput, formatMoneyInput } from "./utils/helpers.js";
+
 /* =========================================================
-   DOCE LUCRO — APP.JS (COMPLETO / UNIFICADO / SEM DUPLICAÇÕES)
-   - Auth Supabase (login/cadastro/recuperação)
-   - Cloud Sync (user_state) + merge por __updatedAt
-   - Offline-first (localStorage sempre)
-   - UX dinheiro global (0,00 some no foco)
-   - SW update fix (iOS/Vercel)
+   DOCE LUCRO — APP.JS (ROBUSTO / SEM PLACEHOLDERS)
 ========================================================= */
 
-let state = normalizeState(loadState());
+let state = getState();
 
-let session = null;
-let cloudUserId = null;
+// (evita bind duplicado)
+let saleBound = false;
+let saleInputDebounce = null;
 
-let isApplyingCloud = false;
-let saveTimer = null;
-let lastSavedHash = "";
+let ordersBound = false;
+let reportsBound = false;
+let moreBound = false;
 
 /* =========================================================
-   ✅ UTILS (HASH / MERGE / CLOUD HELPERS)
+   🔧 HELPERS INTERNOS (NÃO CONFLITAM COM IMPORTS)
 ========================================================= */
 
-// hash estável do estado (pra evitar loop de save)
-function stableHash(obj) {
+function syncThemeIcon(btnTheme) {
+  const s = getState();
+  const icon = btnTheme?.querySelector(".icon");
+  if (icon) icon.textContent = s.theme === "light" ? "☀️" : "🌙";
+}
+
+function commit(mutator) {
+  const s = getState();
+  mutator(s);
+  setState(s);
+  persist();
+  state = getState();
+}
+
+function todayKey() {
+  return new Date().toISOString().slice(0, 10);
+}
+function monthKey() {
+  return new Date().toISOString().slice(0, 7);
+}
+function yearKey() {
+  return new Date().toISOString().slice(0, 4);
+}
+
+function clampMoney(n) {
+  const x = Number(n);
+  if (!Number.isFinite(x)) return 0;
+  return Math.max(0, x);
+}
+
+function safeStr(v) {
+  return String(v ?? "").trim();
+}
+
+function fmtDateBR(iso) {
   try {
-    const seen = new WeakSet();
-    const s = JSON.stringify(obj, function (k, v) {
-      if (v && typeof v === "object") {
-        if (seen.has(v)) return;
-        seen.add(v);
-        // ordena chaves
-        if (!Array.isArray(v)) {
-          const out = {};
-          Object.keys(v)
-            .sort()
-            .forEach((kk) => (out[kk] = v[kk]));
-          return out;
-        }
-      }
-      return v;
-    });
-    // hash simples (rápido) — suficiente p/ debounce
-    let h = 2166136261;
-    for (let i = 0; i < s.length; i++) {
-      h ^= s.charCodeAt(i);
-      h += (h << 1) + (h << 4) + (h << 7) + (h << 8) + (h << 24);
+    const d = new Date(String(iso || ""));
+    if (Number.isNaN(d.getTime())) return String(iso || "");
+    return d.toLocaleDateString("pt-BR");
+  } catch {
+    return String(iso || "");
+  }
+}
+
+/* =========================================================
+   ✅ ROUTER / RENDER
+========================================================= */
+
+function navigate(route, silent = false) {
+  const r = String(route || "home").trim() || "home";
+
+  commit((s) => {
+    s.route = r;
+  });
+
+  qsa(".nav__item").forEach((b) => b.classList.toggle("is-active", b.dataset.route === r));
+
+  render(r);
+
+  try {
+    if ((location.hash || "").replace("#", "") !== r) {
+      history.replaceState(null, "", `#${r}`);
     }
-    return (h >>> 0).toString(16);
-  } catch {
-    return String(Date.now());
+  } catch (_) {}
+
+  if (!silent) window.scrollTo({ top: 0, behavior: "smooth" });
+}
+
+function render(route) {
+  state = getState();
+  const root = qs("#viewRoot");
+  if (!root) return;
+
+  // Supabase login screen (se modo supabase e não logado)
+  if (state.auth?.mode === "supabase") {
+    if (!getUserId()) {
+      renderSupabaseLogin(root);
+      return;
+    }
   }
-}
 
-// carimba __updatedAt somente quando realmente salvar local/cloud
-function stampLocalUpdatedAt(s) {
-  try {
-    if (s && typeof s === "object") s.__updatedAt = new Date().toISOString();
-  } catch {}
-  return s;
-}
-
-function getLocalUpdatedAt(s) {
-  try {
-    const t = s?.__updatedAt;
-    const ms = t ? new Date(t).getTime() : 0;
-    return Number.isFinite(ms) ? ms : 0;
-  } catch {
-    return 0;
+  // PIN lock (opcional)
+  if (state.auth?.mode === "pin" && state.auth?.enabled && !state.auth?.unlocked && route !== "more") {
+    renderPinLockScreen(root);
+    return;
   }
+
+  const routes = {
+    home: () => renderHome(root),
+    sale: () => renderSale(root),
+    orders: () => renderOrders(root),
+    products: () => renderProductsPage(root),
+    reports: () => renderReports(root),
+    more: () => renderMore(root),
+  };
+
+  (routes[route] || routes.home)();
 }
 
-function mergePreferNewer(localState, cloudState) {
-  const local = normalizeState(localState);
-  const cloud = normalizeState(cloudState);
+async function mount() {
+  state = getState();
 
-  const lt = getLocalUpdatedAt(local);
-  const ct = getLocalUpdatedAt(cloud);
+  setTheme(state.theme || "dark");
+  setBrand(state.storeName || "");
 
-  // preferir o que é mais recente
-  if (ct > lt) return cloud;
-  return local;
-}
+  const btnTheme = qs("#btnTheme");
+  syncThemeIcon(btnTheme);
 
-async function getUser() {
-  try {
-    const { data, error } = await supabase.auth.getUser();
-    if (error) return null;
-    return data?.user || null;
-  } catch {
-    return null;
+  btnTheme?.addEventListener("click", () => {
+    commit((s) => {
+      s.theme = s.theme === "light" ? "dark" : "light";
+    });
+    setTheme(getState().theme);
+    syncThemeIcon(btnTheme);
+  });
+
+  window.addEventListener("hashchange", () => {
+    const r = (location.hash || "").replace("#", "").trim();
+    if (r) navigate(r, true);
+  });
+
+  qsa(".nav__item").forEach((btn) => {
+    btn.addEventListener("click", () => navigate(btn.dataset.route));
+  });
+
+  // ✅ sessão + cloud
+  await refreshSession();
+
+  if (getUserId()) {
+    bindCloudSaveHook();
+    await applyCloudAfterLogin(); // pega cloud -> aplica no store
+    state = getState();
+    setTheme(state.theme || "dark");
+    setBrand(state.storeName || "");
+    syncThemeIcon(btnTheme);
+  } else {
+    unbindCloudSaveHook();
   }
-}
 
-async function ensureCloudRow(userId, localState) {
-  if (!userId) return;
-  try {
-    // cria linha se não existir
-    await supabase
-      .from("user_state")
-      .upsert(
-        {
-          user_id: userId,
-          data: normalizeState(localState),
-          updated_at: new Date().toISOString(),
-        },
-        { onConflict: "user_id" }
-      );
-  } catch {}
+  const hashRoute = (location.hash || "").replace("#", "").trim();
+  navigate(hashRoute || state.route || "home", true);
+
+  // UX dinheiro global
+  bindGlobalMoneyUX();
 }
 
 /* =========================================================
-   ✅ AUTH/SESSION
+   ✅ AUTH LISTENER (UM SÓ)
 ========================================================= */
+bindAuthListener({
+  onLoggedIn: async () => {
+    await applyCloudAfterLogin();
+    render(getState().route || "home");
+  },
+  onLoggedOut: async () => {
+    render(getState().route || "home");
+  },
+});
 
-function getUserId() {
-  return session?.user?.id || cloudUserId || null;
-}
-
-async function refreshSession() {
-  try {
-    const { data, error } = await supabase.auth.getSession();
-    if (error) throw error;
-    session = data?.session || null;
-    cloudUserId = session?.user?.id || null;
-  } catch {
-    session = null;
-    cloudUserId = null;
-  }
-}
+/* =========================================================
+   ✅ AUTH UI (SUPABASE)
+========================================================= */
 
 async function doLogin(email, password) {
   try {
-    const { data, error } = await supabase.auth.signInWithPassword({ email, password });
+    const { error } = await supabase.auth.signInWithPassword({ email, password });
     if (error) throw error;
-
-    session = data?.session || null;
-    cloudUserId = session?.user?.id || null;
-
-    await enterAppAfterAuth();
     return true;
   } catch (err) {
     console.error("ERRO LOGIN:", err);
@@ -155,16 +220,11 @@ async function doSignup(email, password) {
     const { data, error } = await supabase.auth.signUp({ email, password });
     if (error) throw error;
 
-    // Se confirmação por e-mail estiver ativa, pode não vir session
+    // se confirmação email ativa
     if (!data?.session) {
       toast("Conta criada! Confirme o e-mail para entrar.", "info");
       return false;
     }
-
-    session = data.session;
-    cloudUserId = session?.user?.id || null;
-
-    await enterAppAfterAuth();
     return true;
   } catch (err) {
     console.error("ERRO SIGNUP:", err);
@@ -173,301 +233,6 @@ async function doSignup(email, password) {
   }
 }
 
-async function enterAppAfterAuth() {
-  await refreshSession();
-
-  if (!session?.user) {
-    render(state.route || "home");
-    return;
-  }
-
-  await applyCloudAfterLogin();
-  render(state.route || "home");
-}
-
-/* =========================================================
-   ✅ CLOUD LOAD/SAVE
-========================================================= */
-
-async function loadStateFromCloud(localState) {
-  const u = await getUser();
-  if (!u) return { state: localState };
-
-  cloudUserId = u.id;
-
-  await ensureCloudRow(u.id, localState);
-
-  try {
-    const { data, error } = await supabase
-      .from("user_state")
-      .select("data, updated_at")
-      .eq("user_id", u.id)
-      .maybeSingle();
-
-    if (error) {
-      console.warn("Erro ao carregar cloud state:", error);
-      return { state: localState };
-    }
-
-    const cloudState = data?.data ?? null;
-
-    // merge inteligente
-    const merged = mergePreferNewer(localState, cloudState || localState);
-
-    // NÃO carimbar __updatedAt aqui. Só calcula hash do merged
-    lastSavedHash = stableHash(normalizeState(merged));
-    return { state: merged };
-  } catch (e) {
-    console.warn("Erro inesperado ao carregar cloud state:", e);
-    return { state: localState };
-  }
-}
-
-function scheduleSaveToCloud(currentState, debounceMs = 700) {
-  if (!cloudUserId) return;
-  if (isApplyingCloud) return;
-
-  // NÃO carimbar aqui senão vira loop
-  const base = normalizeState(currentState);
-  const baseHash = stableHash(base);
-  if (baseHash === lastSavedHash) return;
-
-  if (saveTimer) clearTimeout(saveTimer);
-
-  saveTimer = setTimeout(async () => {
-    try {
-      // carimba somente quando for salvar
-      const normalized = stampLocalUpdatedAt(normalizeState(currentState));
-
-      const { error } = await supabase
-        .from("user_state")
-        .upsert(
-          { user_id: cloudUserId, data: normalized, updated_at: new Date().toISOString() },
-          { onConflict: "user_id" }
-        );
-
-      if (error) {
-        console.warn("Erro ao salvar cloud state:", error);
-        return;
-      }
-
-      lastSavedHash = stableHash(normalized);
-    } catch (e) {
-      console.warn("Erro inesperado ao salvar cloud state:", e);
-    }
-  }, debounceMs);
-}
-
-async function applyCloudAfterLogin() {
-  isApplyingCloud = true;
-  try {
-    const loaded = await loadStateFromCloud(state);
-    state = normalizeState(loaded.state);
-
-    // mantém local igual ao merge “melhor”
-    saveState(state);
-
-    // aplica UI
-    setTheme(state.theme || "dark");
-    setBrand(state.storeName || "");
-    const btnTheme = qs("#btnTheme");
-    syncThemeIcon(btnTheme);
-  } catch (e) {
-    console.warn("Erro no applyCloudAfterLogin:", e);
-  } finally {
-    isApplyingCloud = false;
-  }
-}
-
-/* =========================================================
-   ✅ STATE / PERSIST
-========================================================= */
-
-function normalizeState(s) {
-  const base = getDefaultState();
-  const merged = {
-    ...base,
-    ...(s || {}),
-    ui: { ...base.ui, ...((s && s.ui) || {}) },
-    auth: { ...base.auth, ...((s && s.auth) || {}) },
-  };
-
-  merged.products = Array.isArray(merged.products) ? merged.products : [];
-  merged.sales = Array.isArray(merged.sales) ? merged.sales : [];
-  merged.orders = Array.isArray(merged.orders) ? merged.orders : [];
-  merged.cashMoves = Array.isArray(merged.cashMoves) ? merged.cashMoves : [];
-
-  merged.ui.saleCart = merged.ui.saleCart && typeof merged.ui.saleCart === "object" ? merged.ui.saleCart : {};
-
-  // rascunhos
-  merged.ui.orderDraftItems =
-    merged.ui.orderDraftItems && typeof merged.ui.orderDraftItems === "object" ? merged.ui.orderDraftItems : {};
-  merged.ui.orderDraftForm =
-    merged.ui.orderDraftForm && typeof merged.ui.orderDraftForm === "object" ? merged.ui.orderDraftForm : {};
-
-  merged.theme = merged.theme === "light" ? "light" : "dark";
-  merged.route = merged.route || "home";
-  merged.metaMensal = Number.isFinite(Number(merged.metaMensal)) ? Number(merged.metaMensal) : 3000;
-  merged.mesRef = merged.mesRef || monthKey();
-
-  merged.ui.salePay = merged.ui.salePay || "pix";
-  merged.ui.saleDiscount = Number(merged.ui.saleDiscount || 0);
-  merged.ui.saleExtra = Number(merged.ui.saleExtra || 0);
-  merged.ui.saleReceived = Number(merged.ui.saleReceived || 0);
-
-  merged.storeName = typeof merged.storeName === "string" ? merged.storeName : "";
-
-  merged.auth.mode = merged.auth.mode === "pin" ? "pin" : "supabase";
-  merged.auth.enabled = merged.auth.enabled === true;
-  merged.auth.pin = typeof merged.auth.pin === "string" ? merged.auth.pin : "";
-  merged.auth.unlocked = merged.auth.unlocked === true;
-
-  merged.orders = (merged.orders || []).map((o) => {
-    const total = Number(o?.total || 0);
-    const sinal = Number(o?.sinal || 0);
-    return {
-      ...o,
-      total,
-      sinal,
-      createdAt: o?.createdAt || new Date().toISOString(),
-      status: o?.status || "aberta",
-      metodoSinal: o?.metodoSinal || "pix",
-      metodoRestante: o?.metodoRestante || "pix",
-      sinalRegistrado: o?.sinalRegistrado === true,
-      entregaRegistrada: o?.entregaRegistrada === true,
-    };
-  });
-
-  if (!merged.__updatedAt) merged.__updatedAt = new Date().toISOString();
-
-  return merged;
-}
-
-function persist() {
-  state = normalizeState(state);
-
-  // carimba local
-  stampLocalUpdatedAt(state);
-
-  // local sempre
-  saveState(state);
-
-  // cloud quando logado
-  if (cloudUserId) scheduleSaveToCloud(state);
-}
-
-/* =========================================================
-   ✅ CORE / ROUTER
-========================================================= */
-
-function syncThemeIcon(btnTheme) {
-  const icon = btnTheme?.querySelector(".icon");
-  if (icon) icon.textContent = state.theme === "light" ? "☀️" : "🌙";
-}
-
-function navigate(route, silent = false) {
-  const r = String(route || "home").trim();
-  state.route = r || "home";
-  persist();
-
-  qsa(".nav__item").forEach((b) => b.classList.toggle("is-active", b.dataset.route === state.route));
-  render(state.route);
-
-  try {
-    if ((location.hash || "").replace("#", "") !== state.route) {
-      history.replaceState(null, "", `#${state.route}`);
-    }
-  } catch (_) {}
-
-  if (!silent) window.scrollTo({ top: 0, behavior: "smooth" });
-}
-
-function render(route) {
-  const root = qs("#viewRoot");
-  if (!root) return;
-
-  // Supabase login screen
-  if (state.auth.mode === "supabase") {
-    if (!session) {
-      renderSupabaseLogin(root);
-      return;
-    }
-  }
-
-  // PIN lock (opcional)
-  if (state.auth.mode === "pin" && state.auth?.enabled && !state.auth?.unlocked && route !== "more") {
-    renderPinLockScreen(root);
-    return;
-  }
-
-  const routes = {
-    home: () => renderHome(root),
-    sale: () => renderSale(root),
-    orders: () => renderOrders(root),
-    products: () => renderProducts(root),
-    reports: () => renderReports(root),
-    more: () => renderMore(root),
-  };
-
-  (routes[route] || routes.home)();
-}
-
-async function mount() {
-  // tema/marca
-  setTheme(state.theme || "dark");
-  setBrand(state.storeName || "");
-
-  const btnTheme = qs("#btnTheme");
-  syncThemeIcon(btnTheme);
-
-  btnTheme?.addEventListener("click", () => {
-    state.theme = state.theme === "light" ? "dark" : "light";
-    persist();
-    setTheme(state.theme);
-    syncThemeIcon(btnTheme);
-  });
-
-  window.addEventListener("hashchange", () => {
-    const r = (location.hash || "").replace("#", "").trim();
-    if (r) navigate(r, true);
-  });
-
-  qsa(".nav__item").forEach((btn) => {
-    btn.addEventListener("click", () => navigate(btn.dataset.route));
-  });
-
-  // carrega sessão + cloud se logado
-  await refreshSession();
-  cloudUserId = getUserId();
-
-  if (session?.user) {
-    await applyCloudAfterLogin();
-  }
-
-  const hashRoute = (location.hash || "").replace("#", "").trim();
-  navigate(hashRoute || state.route || "home", true);
-
-  // UX dinheiro global
-  bindGlobalMoneyUX();
-}
-
-/* =========================================================
-   ✅ AUTH LISTENER (UM SÓ)
-========================================================= */
-supabase.auth.onAuthStateChange(async (_event, sess) => {
-  session = sess || null;
-  cloudUserId = session?.user?.id || null;
-
-  if (session?.user) {
-    await applyCloudAfterLogin();
-  }
-
-  render(state.route || "home");
-});
-
-/* =========================================================
-   SUPABASE LOGIN UI
-========================================================= */
 function renderSupabaseLogin(root) {
   const html = `
     <div class="h1">🔐 Entrar</div>
@@ -499,7 +264,7 @@ function renderSupabaseLogin(root) {
 
       <div style="height:10px"></div>
       <div class="muted" style="font-size:12px">
-        Dica: se a confirmação por e-mail estiver ativada no Supabase, você precisa confirmar no e-mail ao criar conta.
+        Dica: se a confirmação por e-mail estiver ativada no Supabase, confirme no e-mail ao criar conta.
       </div>
     </section>
   `;
@@ -520,7 +285,6 @@ function renderSupabaseLogin(root) {
     if (!ok) return;
 
     toast("Logado ✅", "success");
-    render(state.route || "home");
   });
 
   qs("#btnSignup")?.addEventListener("click", async () => {
@@ -530,8 +294,7 @@ function renderSupabaseLogin(root) {
     const ok = await doSignup(email, password);
     if (!ok) return;
 
-    toast("Conta criada e logada ✅", "success");
-    render(state.route || "home");
+    toast("Conta criada ✅", "success");
   });
 
   qs("#btnForgot")?.addEventListener("click", async () => {
@@ -545,7 +308,7 @@ function renderSupabaseLogin(root) {
 }
 
 /* =========================================================
-   PIN LOCK SCREEN (opcional)
+   PIN LOCK SCREEN
 ========================================================= */
 function renderPinLockScreen(root) {
   const html = `
@@ -573,14 +336,17 @@ function renderPinLockScreen(root) {
   root.innerHTML = html;
 
   const enter = () => {
+    const s = getState();
     const pin = String(qs("#inpPinLogin")?.value || "").trim();
     if (!pin) return toast("Digite o PIN", "error");
-    if (pin !== String(state.auth?.pin || "")) return toast("PIN incorreto", "error");
+    if (pin !== String(s.auth?.pin || "")) return toast("PIN incorreto", "error");
 
-    state.auth.unlocked = true;
-    persist();
+    commit((st) => {
+      st.auth.unlocked = true;
+    });
+
     toast("Bem-vindo ✅", "success");
-    render(state.route || "home");
+    render(getState().route || "home");
   };
 
   qs("#btnPinEnter")?.addEventListener("click", enter);
@@ -594,7 +360,20 @@ function renderPinLockScreen(root) {
 /* =========================================================
    HOME
 ========================================================= */
+
+function statCard(label, value, icon = "") {
+  return `
+    <div class="card stat">
+      <div style="font-size:24px;margin-bottom:8px">${icon}</div>
+      <div class="stat__label">${escapeHtml(label)}</div>
+      <div class="stat__value">${escapeHtml(value)}</div>
+    </div>
+  `;
+}
+
 function renderHome(root) {
+  state = getState();
+
   const today = getTodaySummary();
   const openToReceive = getOpenOrdersToReceive();
   const month = getMonthSummary();
@@ -706,38 +485,31 @@ function renderHome(root) {
   root.innerHTML = html;
 
   qs("#btnQuickSale")?.addEventListener("click", () => navigate("sale"));
-  qs("#btnCashOut")?.addEventListener("click", () => showCashOutModal(root));
+  qs("#btnCashOut")?.addEventListener("click", () => showCashOutModal());
 
   qs("#btnEditMeta")?.addEventListener("click", () => {
-    const atual = Number(state.metaMensal || 0);
+    const atual = Number(getState().metaMensal || 0);
     const v = prompt("Defina sua meta de LUCRO do mês (em R$). Ex: 3000", String(atual));
     if (v === null) return;
 
     const num = parseMoneyInput(v);
     if (!Number.isFinite(num) || num < 0) return toast("Valor inválido. Use um número como 3000.", "error");
 
-    state.mesRef = monthKey();
-    state.metaMensal = num;
-    persist();
+    commit((s) => {
+      s.mesRef = monthKey();
+      s.metaMensal = num;
+    });
+
     toast("Meta atualizada ✅", "success");
     renderHome(root);
   });
 }
 
-function statCard(label, value, icon = "") {
-  return `
-    <div class="card stat">
-      <div style="font-size:24px;margin-bottom:8px">${icon}</div>
-      <div class="stat__label">${escapeHtml(label)}</div>
-      <div class="stat__value">${escapeHtml(value)}</div>
-    </div>
-  `;
-}
-
 /* =========================================================
    ✅ SAÍDA DE CAIXA (modal)
 ========================================================= */
-function showCashOutModal(_root) {
+
+function showCashOutModal() {
   const container = qs("#modalContainer");
   if (!container) return toast("ModalContainer não encontrado (#modalContainer).", "error");
 
@@ -803,32 +575,34 @@ function showCashOutModal(_root) {
 
     const labelTipo = categoria === "despesa_negocio" ? "Despesa do negócio" : "Retirada pessoal";
 
-    state.cashMoves.push({
-      id: newId(),
-      date,
-      tipo: "saida",
-      valor,
-      createdAt: new Date().toISOString(),
-      note: `${labelTipo}: ${desc}`,
-      categoria,
-      descricao: desc,
+    commit((s) => {
+      s.cashMoves = Array.isArray(s.cashMoves) ? s.cashMoves : [];
+      s.cashMoves.push({
+        id: newId(),
+        date,
+        tipo: "saida",
+        valor,
+        createdAt: new Date().toISOString(),
+        note: `${labelTipo}: ${desc}`,
+        categoria,
+        descricao: desc,
+      });
     });
 
-    persist();
     modal?.remove();
     toast("Saída registrada ✅", "success");
-    render(state.route || "home");
+    render(getState().route || "home");
   });
 }
 
 /* =========================================================
-   SALE (Balcão)
+   ✅ SALE (Balcão) — (mantido igual ao seu)
 ========================================================= */
-let saleBound = false;
-let saleInputDebounce = null;
 
 function renderSale(root) {
+  state = getState();
   const products = state.products || [];
+
   if (products.length === 0) {
     root.innerHTML = `
       <div class="h1">💳 Venda (Balcão)</div>
@@ -847,11 +621,11 @@ function renderSale(root) {
 
   const focusSnap = captureFocusState();
 
-  const cart = state.ui.saleCart || {};
-  const metodo = state.ui.salePay || "pix";
-  const desconto = Number(state.ui.saleDiscount || 0);
-  const acrescimo = Number(state.ui.saleExtra || 0);
-  const recebido = Number(state.ui.saleReceived || 0);
+  const cart = state.ui?.saleCart || {};
+  const metodo = state.ui?.salePay || "pix";
+  const desconto = Number(state.ui?.saleDiscount || 0);
+  const acrescimo = Number(state.ui?.saleExtra || 0);
+  const recebido = Number(state.ui?.saleReceived || 0);
 
   const totals = computeCartTotals(cart, products, metodo, desconto, acrescimo);
   const falta = metodo === "dinheiro" ? Math.max(0, totals.totalFinal - recebido) : 0;
@@ -978,15 +752,17 @@ function renderSale(root) {
     saleBound = true;
 
     root.addEventListener("click", (e) => {
-      if (state.route !== "sale") return;
+      if (getState().route !== "sale") return;
 
       const t = e.target;
 
       const payBtn = t.closest?.("[data-pay]");
       if (payBtn) {
-        state.ui.salePay = payBtn.dataset.pay || "pix";
-        state.ui.saleReceived = 0;
-        persist();
+        commit((s) => {
+          s.ui = s.ui || {};
+          s.ui.salePay = payBtn.dataset.pay || "pix";
+          s.ui.saleReceived = 0;
+        });
         renderSale(root);
         return;
       }
@@ -995,14 +771,16 @@ function renderSale(root) {
       if (opBtn) {
         const prodId = opBtn.dataset.prod;
         const op = opBtn.dataset.op;
-        const cart = state.ui.saleCart || {};
-        const qty = cart[prodId] || 0;
 
-        cart[prodId] = op === "plus" ? qty + 1 : Math.max(0, qty - 1);
-        if (cart[prodId] === 0) delete cart[prodId];
+        commit((s) => {
+          s.ui = s.ui || {};
+          const cartX = s.ui.saleCart || {};
+          const qty = cartX[prodId] || 0;
+          cartX[prodId] = op === "plus" ? qty + 1 : Math.max(0, qty - 1);
+          if (cartX[prodId] === 0) delete cartX[prodId];
+          s.ui.saleCart = cartX;
+        });
 
-        state.ui.saleCart = cart;
-        persist();
         renderSale(root);
         return;
       }
@@ -1010,35 +788,42 @@ function renderSale(root) {
       if (t.closest?.("#btnFinalizeSale")) return finalizeSale(root);
 
       if (t.closest?.("#btnClearCart")) {
-        state.ui.saleCart = {};
-        state.ui.saleDiscount = 0;
-        state.ui.saleExtra = 0;
-        state.ui.saleReceived = 0;
-        persist();
+        commit((s) => {
+          s.ui = s.ui || {};
+          s.ui.saleCart = {};
+          s.ui.saleDiscount = 0;
+          s.ui.saleExtra = 0;
+          s.ui.saleReceived = 0;
+        });
         renderSale(root);
         return;
       }
     });
 
     root.addEventListener("input", (e) => {
-      if (state.route !== "sale") return;
-
+      if (getState().route !== "sale") return;
       const el = e.target;
       if (!(el instanceof HTMLInputElement)) return;
 
       if (el.id === "inpDiscount") {
-        state.ui.saleDiscount = parseMoneyInput(el.value);
-        persist();
+        commit((s) => {
+          s.ui = s.ui || {};
+          s.ui.saleDiscount = parseMoneyInput(el.value);
+        });
         debounceSaleRecalc(root);
       }
       if (el.id === "inpExtra") {
-        state.ui.saleExtra = parseMoneyInput(el.value);
-        persist();
+        commit((s) => {
+          s.ui = s.ui || {};
+          s.ui.saleExtra = parseMoneyInput(el.value);
+        });
         debounceSaleRecalc(root);
       }
       if (el.id === "inpRecebido") {
-        state.ui.saleReceived = parseMoneyInput(el.value);
-        persist();
+        commit((s) => {
+          s.ui = s.ui || {};
+          s.ui.saleReceived = parseMoneyInput(el.value);
+        });
         debounceSaleRecalc(root);
       }
     });
@@ -1046,7 +831,7 @@ function renderSale(root) {
     root.addEventListener(
       "blur",
       (e) => {
-        if (state.route !== "sale") return;
+        if (getState().route !== "sale") return;
         const el = e.target;
         if (!(el instanceof HTMLInputElement)) return;
         if (el.id === "inpDiscount" || el.id === "inpExtra" || el.id === "inpRecebido") {
@@ -1055,15 +840,6 @@ function renderSale(root) {
       },
       true
     );
-
-    root.addEventListener("change", (e) => {
-      if (state.route !== "sale") return;
-      const el = e.target;
-      if (!(el instanceof HTMLInputElement)) return;
-      if (el.id === "inpDiscount" || el.id === "inpExtra" || el.id === "inpRecebido") {
-        renderSale(root);
-      }
-    });
   }
 
   restoreFocusState(focusSnap);
@@ -1077,14 +853,15 @@ function debounceSaleRecalc(root) {
 }
 
 function updateSaleNumbersInDOM(root) {
-  if (state.route !== "sale") return;
+  const s = getState();
+  if (s.route !== "sale") return;
 
-  const products = state.products || [];
-  const cart = state.ui.saleCart || {};
-  const metodo = state.ui.salePay || "pix";
-  const desconto = Number(state.ui.saleDiscount || 0);
-  const acrescimo = Number(state.ui.saleExtra || 0);
-  const recebido = Number(state.ui.saleReceived || 0);
+  const products = s.products || [];
+  const cart = s.ui?.saleCart || {};
+  const metodo = s.ui?.salePay || "pix";
+  const desconto = Number(s.ui?.saleDiscount || 0);
+  const acrescimo = Number(s.ui?.saleExtra || 0);
+  const recebido = Number(s.ui?.saleReceived || 0);
 
   const totals = computeCartTotals(cart, products, metodo, desconto, acrescimo);
   const falta = metodo === "dinheiro" ? Math.max(0, totals.totalFinal - recebido) : 0;
@@ -1133,57 +910,60 @@ function updateSaleNumbersInDOM(root) {
 }
 
 function finalizeSale(root) {
-  const products = state.products || [];
-  const cart = state.ui.saleCart || {};
-  const metodo = state.ui.salePay || "pix";
-  const desconto = Number(state.ui.saleDiscount || 0);
-  const acrescimo = Number(state.ui.saleExtra || 0);
-  const recebido = Number(state.ui.saleReceived || 0);
+  const s = getState();
+  const products = s.products || [];
+  const cart = s.ui?.saleCart || {};
+  const metodo = s.ui?.salePay || "pix";
+  const desconto = Number(s.ui?.saleDiscount || 0);
+  const acrescimo = Number(s.ui?.saleExtra || 0);
+  const recebido = Number(s.ui?.saleReceived || 0);
 
   if (Object.keys(cart).length === 0) return toast("Carrinho vazio!", "error");
 
   const totals = computeCartTotals(cart, products, metodo, desconto, acrescimo);
   const falta = metodo === "dinheiro" ? Math.max(0, totals.totalFinal - recebido) : 0;
-
   if (metodo === "dinheiro" && falta > 0) return toast(`Falta receber ${brl(falta)}`, "error");
 
   const items = cartToItems(cart, products);
 
-  const venda = {
-    id: newId(),
-    date: todayKey(),
-    createdAt: new Date().toISOString(),
-    metodo,
-    items,
-    desconto,
-    acrescimo,
-    recebido,
-    troco: metodo === "dinheiro" ? Math.max(0, recebido - totals.totalFinal) : 0,
-    totalVenda: totals.totalFinal,
-    totalCusto: totals.totalCusto,
-    taxaCartao: totals.taxa,
-    lucro: totals.lucro,
-  };
+  commit((st) => {
+    st.sales = Array.isArray(st.sales) ? st.sales : [];
+    st.cashMoves = Array.isArray(st.cashMoves) ? st.cashMoves : [];
+    st.ui = st.ui || {};
 
-  state.sales.push(venda);
+    st.sales.push({
+      id: newId(),
+      date: todayKey(),
+      createdAt: new Date().toISOString(),
+      metodo,
+      items,
+      desconto,
+      acrescimo,
+      recebido,
+      troco: metodo === "dinheiro" ? Math.max(0, recebido - totals.totalFinal) : 0,
+      totalVenda: totals.totalFinal,
+      totalCusto: totals.totalCusto,
+      taxaCartao: totals.taxa,
+      lucro: totals.lucro,
+    });
 
-  state.ui.saleCart = {};
-  state.ui.saleDiscount = 0;
-  state.ui.saleExtra = 0;
-  state.ui.saleReceived = 0;
-  state.ui.salePay = "pix";
+    st.ui.saleCart = {};
+    st.ui.saleDiscount = 0;
+    st.ui.saleExtra = 0;
+    st.ui.saleReceived = 0;
+    st.ui.salePay = "pix";
 
-  const tipo = metodo === "dinheiro" ? "dinheiro" : metodo === "pix" ? "pix" : "cartao";
-  state.cashMoves.push({
-    id: newId(),
-    date: todayKey(),
-    tipo,
-    valor: totals.totalFinal,
-    createdAt: new Date().toISOString(),
-    note: "Venda balcão",
+    const tipo = metodo === "dinheiro" ? "dinheiro" : metodo === "pix" ? "pix" : "cartao";
+    st.cashMoves.push({
+      id: newId(),
+      date: todayKey(),
+      tipo,
+      valor: totals.totalFinal,
+      createdAt: new Date().toISOString(),
+      note: "Venda balcão",
+    });
   });
 
-  persist();
   toast("Venda registrada ✅", "success");
   renderSale(root);
 }
@@ -1208,344 +988,396 @@ function renderProductAddRow(product, cart) {
 }
 
 /* =========================================================
-   ORDERS / PRODUCTS / REPORTS / MORE (MESMA LÓGICA)
+   ✅ ORDERS (ENCOMENDAS) — COMPLETO
 ========================================================= */
 
+function ensureOrdersShape(s) {
+  s.orders = Array.isArray(s.orders) ? s.orders : [];
+  s.ui = s.ui || {};
+  s.ui.ordersFilter = s.ui.ordersFilter || "abertas"; // abertas | entregues | canceladas | todas
+}
+
+function getOrderTotals(order) {
+  const items = Array.isArray(order?.items) ? order.items : [];
+  const totalVenda = items.reduce((a, i) => a + Number(i.total || 0), 0);
+  const totalCusto = items.reduce((a, i) => a + Number(i.totalCusto || 0), 0);
+  const taxa = calcCardFee(totalVenda, order?.pagamento || "pix");
+  const desconto = Number(order?.desconto || 0);
+  const acrescimo = Number(order?.acrescimo || 0);
+  const totalFinal = totalVenda + acrescimo - desconto + taxa;
+  const lucro = calcProfit(totalFinal, totalCusto, taxa);
+  const sinal = Number(order?.sinal || 0);
+  const aReceber = Math.max(0, totalFinal - sinal);
+  return { totalVenda, totalCusto, taxa, totalFinal, lucro, sinal, aReceber };
+}
+
 function renderOrders(root) {
-  const orders = state.orders || [];
+  state = getState();
+  ensureOrdersShape(state);
+
+  const filter = state.ui.ordersFilter || "abertas";
+  const all = state.orders || [];
+  const list =
+    filter === "todas"
+      ? all
+      : all.filter((o) => {
+          const st = o.status || "aberta";
+          if (filter === "abertas") return st === "aberta";
+          if (filter === "entregues") return st === "entregue";
+          if (filter === "canceladas") return st === "cancelada";
+          return true;
+        });
+
+  // soma rápido
+  const sumAReceber = list
+    .filter((o) => (o.status || "aberta") === "aberta")
+    .reduce((a, o) => a + getOrderTotals(o).aReceber, 0);
 
   const html = `
     <div class="h1">📦 Encomendas</div>
 
     <section class="card section">
-      <button class="btn btn--brand" id="btnNewOrder" style="width:100%" type="button">➕ Nova encomenda</button>
+      <div style="display:flex;justify-content:space-between;align-items:flex-end;gap:10px;flex-wrap:wrap">
+        <div>
+          <div style="font-weight:900">Controle de encomendas</div>
+          <div class="muted" style="font-size:12px;margin-top:4px">Organize pedidos, sinal e o que falta receber.</div>
+        </div>
+
+        <button class="btn btn--brand" id="btnNewOrder" type="button">➕ Nova encomenda</button>
+      </div>
+
+      <div style="height:12px"></div>
+
+      <div class="pillrow">
+        <button class="pill ${filter === "abertas" ? "is-active" : ""}" data-ordf="abertas" type="button">Abertas</button>
+        <button class="pill ${filter === "entregues" ? "is-active" : ""}" data-ordf="entregues" type="button">Entregues</button>
+        <button class="pill ${filter === "canceladas" ? "is-active" : ""}" data-ordf="canceladas" type="button">Canceladas</button>
+        <button class="pill ${filter === "todas" ? "is-active" : ""}" data-ordf="todas" type="button">Todas</button>
+      </div>
+
+      <div style="height:10px"></div>
+
+      <div class="row" style="border-top:0">
+        <div class="kpi"><b>💸 Total a receber</b><span>Somente encomendas abertas</span></div>
+        <div class="badge">${brl(sumAReceber)}</div>
+      </div>
     </section>
 
     <div style="height:12px"></div>
 
-    ${
-      orders.length === 0
-        ? `
-      <section class="card section">
+    <section class="card section">
+      ${
+        list.length === 0
+          ? `
         <div class="empty-state">
-          <div class="empty-state__icon">📭</div>
-          <div class="empty-state__title">Nenhuma encomenda</div>
-          <div class="empty-state__description">Crie sua primeira encomenda para começar.</div>
+          <div class="empty-state__icon">📦</div>
+          <div class="empty-state__title">Nada por aqui</div>
+          <div class="empty-state__description">Crie sua primeira encomenda e acompanhe o que falta receber.</div>
+          <button class="btn btn--brand" id="btnNewOrder2" type="button">➕ Nova encomenda</button>
         </div>
-      </section>
-    `
-        : `
-      <section class="card">
-        ${orders.map((o) => renderOrderRow(o)).join("")}
-      </section>
-    `
-    }
+      `
+          : `
+        <div class="muted" style="font-size:12px;margin-bottom:10px">
+          Toque em uma encomenda para ver detalhes / editar.
+        </div>
+
+        <div class="cartbox" id="ordersList">
+          ${list
+            .slice()
+            .sort((a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || "")))
+            .map((o) => renderOrderCard(o))
+            .join("")}
+        </div>
+      `
+      }
+    </section>
   `;
 
   root.innerHTML = html;
 
-  qs("#btnNewOrder")?.addEventListener("click", () => showOrderModal(null, root));
+  // binds
+  const bindNew = () => showOrderModal({ mode: "new" });
+  qs("#btnNewOrder")?.addEventListener("click", bindNew);
+  qs("#btnNewOrder2")?.addEventListener("click", bindNew);
 
-  qsa("[data-order-id]").forEach((btn) => {
-    btn.addEventListener("click", () => {
-      const oid = btn.dataset.orderId;
-      const action = btn.dataset.action;
+  // filtros
+  if (!ordersBound) {
+    ordersBound = true;
 
-      if (action === "edit") showOrderModal(oid, root);
+    root.addEventListener("click", (e) => {
+      if (getState().route !== "orders") return;
+      const t = e.target;
 
-      if (action === "delete") {
-        if (confirm("Deletar encomenda?")) {
-          state.orders = state.orders.filter((o) => o.id !== oid);
-          persist();
-          toast("Encomenda deletada ✅", "success");
-          renderOrders(root);
-        }
+      const fbtn = t.closest?.("[data-ordf]");
+      if (fbtn) {
+        const v = fbtn.dataset.ordf || "abertas";
+        commit((s) => {
+          ensureOrdersShape(s);
+          s.ui.ordersFilter = v;
+        });
+        renderOrders(root);
+        return;
       }
 
-      if (action === "delivered") {
-        markOrderDelivered(oid, root);
+      const openBtn = t.closest?.("[data-open-order]");
+      if (openBtn) {
+        const id = openBtn.dataset.openOrder;
+        const s = getState();
+        const ord = (s.orders || []).find((x) => x.id === id);
+        if (!ord) return toast("Encomenda não encontrada.", "error");
+        showOrderModal({ mode: "edit", orderId: id });
+        return;
       }
     });
-  });
+  }
 }
 
-function renderOrderRow(order) {
-  const status = order.status || "aberta";
-  const statusIcon = status === "entregue" ? "✅" : status === "cancelada" ? "❌" : "⏳";
+function renderOrderCard(order) {
+  const o = order || {};
+  const st = o.status || "aberta";
+  const totals = getOrderTotals(o);
 
-  const total = Number(order.total || 0);
-  const sinal = Number(order.sinal || 0);
-  const restante = Math.max(0, total - sinal);
+  const badgeClass =
+    st === "entregue" ? "badge--good" : st === "cancelada" ? "badge--bad" : "badge--warn";
 
-  const dateLabel = formatOrderDateLabel(order);
+  const titulo = safeStr(o.cliente) ? `👩‍🍳 ${o.cliente}` : "👩‍🍳 Cliente";
+  const entrega = o.entrega ? fmtDateBR(o.entrega) : "—";
+  const criado = o.date ? fmtDateBR(o.date) : fmtDateBR(o.createdAt);
 
   return `
-    <div class="row">
-      <div class="kpi">
-        <b>${escapeHtml(order.cliente || "Sem nome")}</b>
-        <span>
-          ${statusIcon} ${escapeHtml(status)} • ${escapeHtml(dateLabel)} • Total: ${brl(total)} • Sinal: ${brl(
-    sinal
-  )} • Falta: ${brl(restante)}
-        </span>
+    <div class="card section" style="padding:14px" data-open-order="${escapeHtml(o.id)}" role="button" tabindex="0">
+      <div style="display:flex;justify-content:space-between;gap:10px;align-items:flex-start;flex-wrap:wrap">
+        <div style="min-width:0">
+          <div style="font-weight:950;font-size:14px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escapeHtml(
+            titulo
+          )}</div>
+          <div class="muted" style="font-size:12px;margin-top:4px">
+            Criado: ${escapeHtml(criado)} • Entrega: ${escapeHtml(entrega)}
+          </div>
+        </div>
+
+        <div class="badge ${badgeClass}">
+          ${st === "aberta" ? "Aberta" : st === "entregue" ? "Entregue" : "Cancelada"}
+        </div>
       </div>
 
-      <div style="display:flex;gap:8px;flex-wrap:wrap">
-        ${
-          status === "aberta"
-            ? `<button class="btn btn--small btn--brand" data-order-id="${order.id}" data-action="delivered" type="button">📦 Marcar como entregue</button>`
-            : status === "entregue"
-            ? `<span class="badge badge--good">✅ Entregue</span>`
-            : `<span class="badge badge--bad">❌ Cancelada</span>`
-        }
-        <button class="btn btn--small" data-order-id="${order.id}" data-action="edit" type="button">Editar</button>
-        <button class="btn btn--small btn--danger" data-order-id="${order.id}" data-action="delete" type="button">Deletar</button>
+      <div style="height:10px"></div>
+
+      <div class="row" style="border-top:0;padding:10px 0">
+        <div class="kpi"><b>Total</b><span>Com taxa/desconto</span></div>
+        <div class="value">${brl(totals.totalFinal)}</div>
       </div>
+
+      <div class="row" style="padding:10px 0">
+        <div class="kpi"><b>Sinal</b><span>Já recebeu</span></div>
+        <div class="value">${brl(totals.sinal)}</div>
+      </div>
+
+      <div class="row" style="padding:10px 0">
+        <div class="kpi"><b>Falta</b><span>A receber</span></div>
+        <div class="value" style="color:${st === "aberta" ? "var(--warn)" : "var(--muted)"}">${brl(
+          totals.aReceber
+        )}</div>
+      </div>
+
+      <div style="height:10px"></div>
+      <button class="btn btn--small" style="width:100%" type="button" data-open-order="${escapeHtml(
+        o.id
+      )}">Ver / Editar</button>
     </div>
   `;
 }
 
-function formatOrderDateLabel(order) {
-  const retirada = String(order?.dataRetirada || "").trim();
-  if (retirada) {
-    try {
-      const d = new Date(`${retirada}T00:00:00`);
-      return `Retirada: ${d.toLocaleDateString("pt-BR")}`;
-    } catch {
-      return `Retirada: ${retirada}`;
-    }
-  }
-  const createdAt = order?.createdAt ? new Date(order.createdAt) : null;
-  if (createdAt && !Number.isNaN(createdAt.getTime())) {
-    return `Pedido: ${createdAt.toLocaleDateString("pt-BR")}`;
-  }
-  return "Pedido: —";
-}
+function showOrderModal({ mode, orderId }) {
+  const container = qs("#modalContainer");
+  if (!container) return toast("ModalContainer não encontrado (#modalContainer).", "error");
 
-function markOrderDelivered(orderId, root) {
-  const idx = state.orders.findIndex((o) => o.id === orderId);
-  if (idx < 0) return;
+  const s = getState();
+  ensureOrdersShape(s);
+  const products = Array.isArray(s.products) ? s.products : [];
 
-  const order = state.orders[idx];
-  if ((order.status || "aberta") !== "aberta") return toast("Essa encomenda não está aberta.", "error");
+  const existing = mode === "edit" ? (s.orders || []).find((x) => x.id === orderId) : null;
 
-  const total = Number(order.total || 0);
-  const sinal = Number(order.sinal || 0);
-  const restante = Math.max(0, total - sinal);
+  const draft = existing
+    ? structuredClone(existing)
+    : {
+        id: newId(),
+        status: "aberta",
+        date: todayKey(),
+        createdAt: new Date().toISOString(),
+        cliente: "",
+        telefone: "",
+        entrega: todayKey(),
+        pagamento: "pix",
+        desconto: 0,
+        acrescimo: 0,
+        sinal: 0,
+        obs: "",
+        items: [],
+      };
 
-  if (order.entregaRegistrada === true) {
-    state.orders[idx] = { ...order, status: "entregue" };
-    persist();
-    toast("Encomenda já estava entregue ✅", "info");
-    renderOrders(root);
-    return;
-  }
-
-  const ok = confirm(
-    `Marcar como ENTREGUE?\n\nCliente: ${order.cliente || "—"}\nTotal: ${brl(total)}\nSinal: ${brl(
-      sinal
-    )}\nFalta receber: ${brl(restante)}`
-  );
-  if (!ok) return;
-
-  if (restante > 0) {
-    const tipo =
-      order.metodoRestante === "dinheiro" ? "dinheiro" : order.metodoRestante === "cartao" ? "cartao" : "pix";
-    state.cashMoves.push({
-      id: newId(),
-      date: todayKey(),
-      tipo,
-      valor: restante,
-      createdAt: new Date().toISOString(),
-      note: `Restante encomenda - ${order.cliente || "Cliente"}`,
-    });
-  }
-
-  state.sales.push({
-    id: newId(),
-    date: todayKey(),
-    createdAt: new Date().toISOString(),
-    metodo: order.metodoRestante || "pix",
-    items: Array.isArray(order.items) ? order.items : [],
-    desconto: 0,
-    acrescimo: 0,
-    recebido: 0,
-    troco: 0,
-    totalVenda: total,
-    totalCusto: Number(order.totalCusto || 0),
-    taxaCartao: 0,
-    lucro: calcProfit(total, Number(order.totalCusto || 0), 0),
-    ref: { type: "order", orderId: order.id },
-  });
-
-  state.orders[idx] = {
-    ...order,
-    status: "entregue",
-    entregaRegistrada: true,
-    entregueEm: new Date().toISOString(),
-  };
-
-  persist();
-  toast("Encomenda entregue ✅ (caixa + relatório atualizados)", "success");
-  renderOrders(root);
-}
-
-/* =========================================================
-   MODAL ENCOMENDA (MESMA LÓGICA)
-========================================================= */
-
-function showOrderModal(orderId, root) {
-  const products = state.products || [];
-  const order = orderId ? state.orders.find((o) => o.id === orderId) : null;
-  const isEdit = !!order;
-
-  const key = draftKeyForOrder(orderId);
-
-  const draft = getOrderDraft(orderId, order);
-
-  const itemsBox =
-    state.ui.orderDraftItems && typeof state.ui.orderDraftItems === "object" ? state.ui.orderDraftItems : {};
-  const itemsById = {
-    ...(((itemsBox[key] && typeof itemsBox[key] === "object" ? itemsBox[key] : null) ||
-      order?.itemsById ||
-      {}) ?? {}),
-  };
-
-  const items = cartToItems(itemsById, products);
-  const subtotal = items.reduce((a, i) => a + i.qty * i.unitPrice, 0);
-  const totalCusto = items.reduce((a, i) => a + i.qty * i.unitCost, 0);
-
-  const taxaEntregaBase = Number(draft?.taxaEntrega || 0);
-  const sinalBase = Number(draft?.sinal || 0);
-  const total = subtotal + taxaEntregaBase;
-
-  const metodoSinal = draft?.metodoSinal || order?.metodoSinal || "pix";
-  const metodoRestante = draft?.metodoRestante || order?.metodoRestante || "pix";
-  const statusDraft = draft?.status || order?.status || "aberta";
-  const sinalRegistrado = order?.sinalRegistrado === true;
+  const totals = getOrderTotals(draft);
 
   const html = `
     <div class="modal">
       <div class="modal__content">
         <div class="modal__header">
-          <div class="modal__title">${isEdit ? "Editar encomenda" : "Nova encomenda"}</div>
-          <button class="modal__close" id="closeModal" type="button">X</button>
+          <div class="modal__title">${mode === "edit" ? "✏️ Editar encomenda" : "➕ Nova encomenda"}</div>
+          <button class="modal__close" id="closeOrderModal" type="button">X</button>
         </div>
+
+        <div class="fieldgrid">
+          <div class="field">
+            <label class="label">Cliente</label>
+            <input class="input" id="ordCliente" type="text" placeholder="Nome do cliente" value="${escapeHtml(
+              draft.cliente || ""
+            )}" />
+          </div>
+
+          <div class="field">
+            <label class="label">Telefone (opcional)</label>
+            <input class="input" id="ordTel" type="tel" placeholder="(11) 99999-9999" value="${escapeHtml(
+              draft.telefone || ""
+            )}" />
+          </div>
+        </div>
+
+        <div style="height:10px"></div>
+
+        <div class="fieldgrid">
+          <div class="field">
+            <label class="label">Data</label>
+            <input class="input" id="ordDate" type="date" value="${escapeHtml(draft.date || todayKey())}" />
+          </div>
+
+          <div class="field">
+            <label class="label">Entrega</label>
+            <input class="input" id="ordEntrega" type="date" value="${escapeHtml(
+              draft.entrega || todayKey()
+            )}" />
+          </div>
+        </div>
+
+        <div style="height:10px"></div>
 
         <div class="field">
-          <label class="label">Nome do cliente</label>
-          <input type="text" class="input" id="inpCliente" placeholder="Ex: Maria Silva" value="${escapeHtml(
-            draft?.cliente || ""
-          )}" />
-        </div>
-
-        <div class="field mt-12">
-          <label class="label">WhatsApp (opcional)</label>
-          <input type="text" class="input" id="inpWhats" placeholder="Ex: 11999999999" value="${escapeHtml(
-            draft?.whats || ""
-          )}" />
-        </div>
-
-        <div class="field mt-12">
-          <label class="label">Data de retirada</label>
-          <input type="date" class="input" id="inpData" value="${escapeHtml(draft?.dataRetirada || "")}" />
-        </div>
-
-        <div class="field mt-12">
-          <label class="label">Taxa de entrega</label>
-          <input type="text" inputmode="decimal" class="input" id="inpTaxa" placeholder="0,00" value="${formatMoneyInput(
-            taxaEntregaBase
-          )}" />
-        </div>
-
-        <div style="font-weight:900;margin-top:16px;margin-bottom:10px">📦 Produtos</div>
-        ${
-          products.length === 0
-            ? `<div class="muted">Cadastre produtos para montar encomendas.</div>`
-            : `<div class="productlist">
-                ${products.map((p) => renderOrderProductRow(p, itemsById)).join("")}
-              </div>`
-        }
-
-        <div class="carttotal" style="margin-top:16px">
-          <div class="kpi"><b>Subtotal</b></div>
-          <div class="big" style="color:var(--brand)">${brl(subtotal)}</div>
-        </div>
-
-        <div class="carttotal">
-          <div class="kpi"><b>Custo total</b></div>
-          <div class="value">${brl(totalCusto)}</div>
-        </div>
-
-        <div class="field mt-12">
-          <label class="label">Sinal</label>
-          <input type="text" inputmode="decimal" class="input" id="inpSinal" placeholder="0,00" value="${formatMoneyInput(
-            sinalBase
-          )}" />
-          <div class="muted" style="font-size:12px;margin-top:6px">Se o cliente já pagou sinal, você pode registrar no caixa aqui.</div>
-        </div>
-
-        <div class="field mt-12">
-          <label class="label">Método do sinal</label>
-          <select class="select" id="selMetodoSinal">
-            <option value="pix" ${metodoSinal === "pix" ? "selected" : ""}>Pix</option>
-            <option value="dinheiro" ${metodoSinal === "dinheiro" ? "selected" : ""}>Dinheiro</option>
-            <option value="cartao" ${metodoSinal === "cartao" ? "selected" : ""}>Cartão</option>
-          </select>
-        </div>
-
-        <div class="field mt-12">
-          <label class="label">Método do restante (na entrega)</label>
-          <select class="select" id="selMetodoRestante">
-            <option value="pix" ${metodoRestante === "pix" ? "selected" : ""}>Pix</option>
-            <option value="dinheiro" ${metodoRestante === "dinheiro" ? "selected" : ""}>Dinheiro</option>
-            <option value="cartao" ${metodoRestante === "cartao" ? "selected" : ""}>Cartão</option>
-          </select>
-        </div>
-
-        ${
-          isEdit
-            ? `
-          <div style="height:10px"></div>
-          <button class="btn" id="btnRegisterSinal" style="width:100%" type="button" ${sinalRegistrado ? "disabled" : ""}>
-            ${sinalRegistrado ? "✅ Sinal já registrado no caixa" : "💰 Registrar sinal no caixa"}
-          </button>
-        `
-            : ""
-        }
-
-        <div class="carttotal" style="margin-top:16px">
-          <div class="kpi"><b>Total</b></div>
-          <div class="big" style="color:var(--brand)">${brl(total)}</div>
-        </div>
-
-        <div class="carttotal">
-          <div class="kpi"><b>Restante</b></div>
-          <div class="big" style="color:var(--warn)">${brl(Math.max(0, total - sinalBase))}</div>
-        </div>
-
-        <div class="carttotal">
-          <div class="kpi"><b>Lucro estimado</b></div>
-          <div class="big" style="color:var(--good)">${brl(calcProfit(total, totalCusto, 0))}</div>
-        </div>
-
-        <div class="field mt-12">
-          <label class="label">Status</label>
-          <select class="select" id="selStatus">
-            <option value="aberta" ${statusDraft === "aberta" ? "selected" : ""}>Aberta</option>
-            <option value="entregue" ${statusDraft === "entregue" ? "selected" : ""}>Entregue</option>
-            <option value="cancelada" ${statusDraft === "cancelada" ? "selected" : ""}>Cancelada</option>
-          </select>
+          <div class="label">Pagamento</div>
+          <div style="display:flex;gap:8px;flex-wrap:wrap">
+            <button class="pill ${draft.pagamento === "pix" ? "is-active" : ""}" data-ordpay="pix" type="button">📱 Pix</button>
+            <button class="pill ${draft.pagamento === "dinheiro" ? "is-active" : ""}" data-ordpay="dinheiro" type="button">💵 Dinheiro</button>
+            <button class="pill ${draft.pagamento === "cartao" ? "is-active" : ""}" data-ordpay="cartao" type="button">💳 Cartão</button>
+          </div>
         </div>
 
         <div style="height:12px"></div>
-        <button class="btn btn--brand" id="btnSaveOrder" style="width:100%" type="button">Salvar encomenda</button>
+
+        <section class="card section" style="padding:14px">
+          <div style="font-weight:950;margin-bottom:8px">🍰 Itens da encomenda</div>
+
+          ${
+            products.length === 0
+              ? `
+              <div class="muted" style="font-size:12px">
+                Você ainda não cadastrou produtos. Vá em <b>Produtos</b> para cadastrar e depois volte aqui.
+              </div>
+            `
+              : `
+              <div class="field">
+                <label class="label">Adicionar produto</label>
+                <select class="select" id="ordAddProd">
+                  <option value="">Selecione um produto...</option>
+                  ${products
+                    .map((p) => `<option value="${escapeHtml(p.id)}">${escapeHtml(p.nome)} — ${brl(p.preco)}</option>`)
+                    .join("")}
+                </select>
+              </div>
+
+              <div style="height:10px"></div>
+
+              <div class="cartbox" id="ordItems">
+                ${renderOrderItems(draft.items || [])}
+              </div>
+
+              <div style="height:10px"></div>
+              <button class="btn" id="btnAddCustomItem" style="width:100%" type="button">➕ Adicionar item manual</button>
+            `
+          }
+        </section>
+
+        <div style="height:12px"></div>
+
+        <div class="fieldgrid">
+          <div class="field">
+            <label class="label">Desconto</label>
+            <input class="input" id="ordDesconto" type="text" inputmode="decimal" placeholder="0,00" value="${formatMoneyInput(
+              Number(draft.desconto || 0)
+            )}" />
+          </div>
+          <div class="field">
+            <label class="label">Acréscimo</label>
+            <input class="input" id="ordAcrescimo" type="text" inputmode="decimal" placeholder="0,00" value="${formatMoneyInput(
+              Number(draft.acrescimo || 0)
+            )}" />
+          </div>
+        </div>
+
+        <div style="height:10px"></div>
+
+        <div class="fieldgrid">
+          <div class="field">
+            <label class="label">Sinal recebido</label>
+            <input class="input" id="ordSinal" type="text" inputmode="decimal" placeholder="0,00" value="${formatMoneyInput(
+              Number(draft.sinal || 0)
+            )}" />
+          </div>
+
+          <div class="field">
+            <label class="label">Status</label>
+            <select class="select" id="ordStatus">
+              <option value="aberta" ${draft.status === "aberta" ? "selected" : ""}>Aberta</option>
+              <option value="entregue" ${draft.status === "entregue" ? "selected" : ""}>Entregue</option>
+              <option value="cancelada" ${draft.status === "cancelada" ? "selected" : ""}>Cancelada</option>
+            </select>
+          </div>
+        </div>
+
+        <div style="height:10px"></div>
+
+        <div class="field">
+          <label class="label">Observações</label>
+          <input class="input" id="ordObs" type="text" placeholder="Ex: sem lactose, topper, entrega às 18h..." value="${escapeHtml(
+            draft.obs || ""
+          )}" />
+        </div>
+
+        <div style="height:12px"></div>
+
+        <section class="card section" style="background:rgba(255,79,163,0.08);border-color:rgba(255,79,163,0.25)">
+          <div class="row" style="border-top:0">
+            <div class="kpi"><b>Total</b><span>Com taxa/desconto</span></div>
+            <div class="value" id="ordTotal">${brl(totals.totalFinal)}</div>
+          </div>
+          <div class="row">
+            <div class="kpi"><b>Lucro</b><span>Estimado</span></div>
+            <div class="value" id="ordLucro" style="color:var(--good)">${brl(totals.lucro)}</div>
+          </div>
+          <div class="row">
+            <div class="kpi"><b>Falta receber</b><span>Total − sinal</span></div>
+            <div class="value" id="ordFalta" style="color:var(--warn)">${brl(totals.aReceber)}</div>
+          </div>
+        </section>
+
+        <div style="height:12px"></div>
+
+        <button class="btn btn--brand" id="btnSaveOrder" style="width:100%" type="button">${
+          mode === "edit" ? "Salvar alterações" : "Salvar encomenda"
+        }</button>
 
         ${
-          isEdit
+          mode === "edit"
             ? `
           <div style="height:8px"></div>
-          <button class="btn btn--danger" id="btnDeleteOrder" style="width:100%" type="button">Deletar encomenda</button>
+          <button class="btn btn--danger" id="btnDeleteOrder" style="width:100%" type="button">🗑️ Excluir encomenda</button>
         `
             : ""
         }
@@ -1553,711 +1385,659 @@ function showOrderModal(orderId, root) {
     </div>
   `;
 
-  const container = qs("#modalContainer");
   container.innerHTML = html;
 
   const modal = container.querySelector(".modal");
-  container.querySelector("#closeModal")?.addEventListener("click", () => modal?.remove());
+  const close = () => modal?.remove();
+
+  container.querySelector("#closeOrderModal")?.addEventListener("click", close);
   modal?.addEventListener("click", (e) => {
-    if (e.target === modal) modal.remove();
+    if (e.target === modal) close();
   });
 
-  bindMoneyInputClearOnFocus(container, ["inpTaxa", "inpSinal"]);
+  // money UX
+  bindMoneyInputClearOnFocus(container, ["ordDesconto", "ordAcrescimo", "ordSinal"]);
 
-  container.addEventListener("input", (e) => {
-    const el = e.target;
-    if (!(el instanceof HTMLInputElement) && !(el instanceof HTMLSelectElement)) return;
+  // state local do modal
+  let local = draft;
 
-    if (el.id === "inpCliente") setOrderDraft(orderId, { cliente: el.value });
-    if (el.id === "inpWhats") setOrderDraft(orderId, { whats: el.value });
-    if (el.id === "inpData") setOrderDraft(orderId, { dataRetirada: el.value });
-
-    if (el.id === "inpTaxa") setOrderDraft(orderId, { taxaEntrega: parseMoneyInput(el.value) });
-    if (el.id === "inpSinal") setOrderDraft(orderId, { sinal: parseMoneyInput(el.value) });
-
-    if (el.id === "selMetodoSinal") setOrderDraft(orderId, { metodoSinal: el.value });
-    if (el.id === "selMetodoRestante") setOrderDraft(orderId, { metodoRestante: el.value });
-    if (el.id === "selStatus") setOrderDraft(orderId, { status: el.value });
-  });
-
-  container.querySelectorAll("[data-op]").forEach((btn) => {
-    btn.addEventListener("click", () => {
-      const prodId = btn.dataset.prod;
-      const op = btn.dataset.op;
-      const q = itemsById[prodId] || 0;
-
-      itemsById[prodId] = op === "plus" ? q + 1 : Math.max(0, q - 1);
-      if (itemsById[prodId] === 0) delete itemsById[prodId];
-
-      const box =
-        state.ui.orderDraftItems && typeof state.ui.orderDraftItems === "object" ? state.ui.orderDraftItems : {};
-      box[key] = itemsById;
-      state.ui.orderDraftItems = box;
-
-      persist();
-      showOrderModal(orderId, root);
-    });
-  });
-
-  container.querySelector("#btnRegisterSinal")?.addEventListener("click", () => {
-    if (!isEdit) return;
-    const idx = state.orders.findIndex((o) => o.id === orderId);
-    if (idx < 0) return;
-
-    const sinal = parseMoneyInput(container.querySelector("#inpSinal")?.value || "0");
-    if (!sinal || sinal <= 0) return toast("Defina um valor de sinal maior que 0.", "error");
-
-    const metodoSinalX = container.querySelector("#selMetodoSinal")?.value || "pix";
-
-    const current = state.orders[idx];
-    if (current.sinalRegistrado === true) return toast("Sinal já foi registrado.", "info");
-
-    const tipo = metodoSinalX === "dinheiro" ? "dinheiro" : metodoSinalX === "cartao" ? "cartao" : "pix";
-
-    state.cashMoves.push({
-      id: newId(),
-      date: todayKey(),
-      tipo,
-      valor: sinal,
-      createdAt: new Date().toISOString(),
-      note: `Sinal encomenda - ${current.cliente || "Cliente"}`,
-    });
-
-    state.orders[idx] = {
-      ...current,
-      sinal,
-      metodoSinal: metodoSinalX,
-      sinalRegistrado: true,
+  const recomputeAndPaint = () => {
+    const totalsX = getOrderTotals(local);
+    const setText = (id, v) => {
+      const el = container.querySelector(`#${id}`);
+      if (el) el.textContent = v;
     };
+    setText("ordTotal", brl(totalsX.totalFinal));
+    setText("ordLucro", brl(totalsX.lucro));
+    setText("ordFalta", brl(totalsX.aReceber));
+  };
 
-    persist();
-    toast("Sinal registrado no caixa ✅", "success");
-    showOrderModal(orderId, root);
+  const renderItemsInto = () => {
+    const box = container.querySelector("#ordItems");
+    if (!box) return;
+    box.innerHTML = renderOrderItems(local.items || []);
+  };
+
+  // pagamento pills
+  container.querySelectorAll("[data-ordpay]")?.forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const pay = btn.dataset.ordpay || "pix";
+      local.pagamento = pay;
+      // atualiza pills
+      container.querySelectorAll("[data-ordpay]")?.forEach((b) => {
+        b.classList.toggle("is-active", b.dataset.ordpay === pay);
+        b.setAttribute("aria-pressed", b.dataset.ordpay === pay ? "true" : "false");
+      });
+      recomputeAndPaint();
+    });
   });
 
-  container.querySelector("#btnSaveOrder")?.addEventListener("click", () => {
-    const cliente = (container.querySelector("#inpCliente")?.value || "").trim();
-    const whats = (container.querySelector("#inpWhats")?.value || "").trim();
-    const dataRetirada = container.querySelector("#inpData")?.value || "";
-    const taxaEntrega = parseMoneyInput(container.querySelector("#inpTaxa")?.value || "0");
-    const sinal = parseMoneyInput(container.querySelector("#inpSinal")?.value || "0");
-    const status = container.querySelector("#selStatus")?.value || "aberta";
-    const metodoSinalX = container.querySelector("#selMetodoSinal")?.value || "pix";
-    const metodoRestanteX = container.querySelector("#selMetodoRestante")?.value || "pix";
+  // add product
+  container.querySelector("#ordAddProd")?.addEventListener("change", (e) => {
+    const sel = e.target;
+    const prodId = String(sel.value || "").trim();
+    if (!prodId) return;
 
-    if (!cliente) return toast("Preencha o nome do cliente", "error");
-    if (Object.keys(itemsById).length === 0) return toast("Adicione pelo menos um produto", "error");
+    const s2 = getState();
+    const products2 = Array.isArray(s2.products) ? s2.products : [];
+    const p = products2.find((x) => x.id === prodId);
+    if (!p) return toast("Produto não encontrado.", "error");
 
-    const itemsX = cartToItems(itemsById, products);
-    const subtotalX = itemsX.reduce((a, i) => a + i.qty * i.unitPrice, 0);
-    const totalCustoX = itemsX.reduce((a, i) => a + i.qty * i.unitCost, 0);
-    const totalX = subtotalX + taxaEntrega;
-
-    if (isEdit) {
-      const idx = state.orders.findIndex((o) => o.id === orderId);
-      if (idx >= 0) {
-        const prev = state.orders[idx] || {};
-        state.orders[idx] = {
-          ...prev,
-          cliente,
-          whats,
-          dataRetirada,
-          taxaEntrega,
-          sinal,
-          status,
-          itemsById,
-          items: itemsX,
-          total: totalX,
-          totalCusto: totalCustoX,
-          lucroEstimado: calcProfit(totalX, totalCustoX, 0),
-          metodoSinal: metodoSinalX,
-          metodoRestante: metodoRestanteX,
-          sinalRegistrado: prev.sinalRegistrado === true,
-          entregaRegistrada: prev.entregaRegistrada === true,
-          createdAt: prev.createdAt || new Date().toISOString(),
-        };
-      }
+    const exists = (local.items || []).find((it) => it.prodId === prodId);
+    if (exists) {
+      exists.qty = Number(exists.qty || 0) + 1;
+      exists.total = Number(exists.qty || 0) * Number(exists.unitPrice || 0);
+      exists.totalCusto = Number(exists.qty || 0) * Number(exists.unitCost || 0);
     } else {
-      state.orders.push({
+      local.items = Array.isArray(local.items) ? local.items : [];
+      local.items.push({
         id: newId(),
-        createdAt: new Date().toISOString(),
-        status: "aberta",
-        cliente,
-        whats,
-        dataRetirada,
-        taxaEntrega,
-        sinal,
-        itemsById,
-        items: itemsX,
-        total: totalX,
-        totalCusto: totalCustoX,
-        lucroEstimado: calcProfit(totalX, totalCustoX, 0),
-        metodoSinal: metodoSinalX,
-        metodoRestante: metodoRestanteX,
-        sinalRegistrado: false,
-        entregaRegistrada: false,
+        prodId: p.id,
+        nome: p.nome,
+        qty: 1,
+        unitPrice: Number(p.preco || 0),
+        unitCost: Number(p.custo || 0),
+        total: Number(p.preco || 0),
+        totalCusto: Number(p.custo || 0),
+        isCustom: false,
       });
     }
 
-    clearOrderDraft(orderId);
-    const box =
-      state.ui.orderDraftItems && typeof state.ui.orderDraftItems === "object" ? state.ui.orderDraftItems : {};
-    if (box[key]) delete box[key];
-    state.ui.orderDraftItems = box;
-
-    persist();
-    modal?.remove();
-    toast(`Encomenda ${isEdit ? "atualizada" : "criada"} ✅`, "success");
-    renderOrders(root);
+    sel.value = "";
+    renderItemsInto();
+    recomputeAndPaint();
   });
 
-  container.querySelector("#btnDeleteOrder")?.addEventListener("click", () => {
-    if (confirm("Tem certeza que quer deletar esta encomenda?")) {
-      state.orders = state.orders.filter((o) => o.id !== orderId);
+  // add custom item
+  container.querySelector("#btnAddCustomItem")?.addEventListener("click", () => {
+    local.items = Array.isArray(local.items) ? local.items : [];
+    local.items.push({
+      id: newId(),
+      prodId: null,
+      nome: "Item",
+      qty: 1,
+      unitPrice: 0,
+      unitCost: 0,
+      total: 0,
+      totalCusto: 0,
+      isCustom: true,
+    });
+    renderItemsInto();
+    recomputeAndPaint();
+  });
 
-      clearOrderDraft(orderId);
-      const box =
-        state.ui.orderDraftItems && typeof state.ui.orderDraftItems === "object" ? state.ui.orderDraftItems : {};
-      if (box[key]) delete box[key];
-      state.ui.orderDraftItems = box;
+  // items actions
+  container.addEventListener("click", (e) => {
+    const t = e.target;
 
-      persist();
-      modal?.remove();
-      toast("Encomenda deletada ✅", "success");
-      renderOrders(root);
+    const op = t.closest?.("[data-oit-op]");
+    if (op) {
+      const itemId = op.dataset.oitId;
+      const which = op.dataset.oitOp;
+      const item = (local.items || []).find((x) => x.id === itemId);
+      if (!item) return;
+
+      if (which === "del") {
+        local.items = (local.items || []).filter((x) => x.id !== itemId);
+        renderItemsInto();
+        recomputeAndPaint();
+        return;
+      }
+
+      const qty = Number(item.qty || 0);
+      item.qty = which === "plus" ? qty + 1 : Math.max(1, qty - 1);
+      item.total = Number(item.qty || 0) * Number(item.unitPrice || 0);
+      item.totalCusto = Number(item.qty || 0) * Number(item.unitCost || 0);
+
+      renderItemsInto();
+      recomputeAndPaint();
+      return;
     }
   });
-}
 
-function renderOrderProductRow(product, itemsById) {
-  const qty = itemsById[product.id] || 0;
+  // item edits (nome, preço, custo)
+  container.addEventListener("input", (e) => {
+    const el = e.target;
+    if (!(el instanceof HTMLInputElement)) return;
 
-  return `
-    <div class="proditem">
-      <div class="prodmeta">
-        <b>${escapeHtml(product.nome)}</b>
-        <span>Venda: ${brl(product.preco)} | Custo: ${brl(product.custo)}</span>
-      </div>
+    // cabeçalho
+    if (el.id === "ordCliente") local.cliente = safeStr(el.value);
+    if (el.id === "ordTel") local.telefone = safeStr(el.value);
+    if (el.id === "ordObs") local.obs = safeStr(el.value);
 
-      <div class="qty">
-        <button class="qbtn" data-prod="${product.id}" data-op="minus" type="button">−</button>
-        <div class="qnum">${qty}</div>
-        <button class="qbtn" data-prod="${product.id}" data-op="plus" type="button">+</button>
-      </div>
-    </div>
-  `;
-}
-
-/* =========================================================
-   PRODUCTS
-========================================================= */
-
-function renderProducts(root) {
-  const products = state.products || [];
-
-  const html = `
-    <div class="h1">🎂 Produtos</div>
-
-    <section class="card section">
-      <button class="btn btn--brand" id="btnNewProduct" style="width:100%" type="button">➕ Novo produto</button>
-    </section>
-
-    <div style="height:12px"></div>
-
-    ${
-      products.length === 0
-        ? `
-      <section class="card section">
-        <div class="empty-state">
-          <div class="empty-state__icon">📦</div>
-          <div class="empty-state__title">Nenhum produto</div>
-          <div class="empty-state__description">Crie seu primeiro produto para começar a vender.</div>
-        </div>
-      </section>
-    `
-        : `
-      <section class="card">
-        ${products.map((p) => renderProductRow(p)).join("")}
-      </section>
-    `
+    if (el.id === "ordDesconto") {
+      local.desconto = clampMoney(parseMoneyInput(el.value));
+      recomputeAndPaint();
     }
-  `;
+    if (el.id === "ordAcrescimo") {
+      local.acrescimo = clampMoney(parseMoneyInput(el.value));
+      recomputeAndPaint();
+    }
+    if (el.id === "ordSinal") {
+      local.sinal = clampMoney(parseMoneyInput(el.value));
+      recomputeAndPaint();
+    }
 
-  root.innerHTML = html;
+    // items
+    const itemId = el.dataset?.oitId;
+    const field = el.dataset?.oitField;
+    if (itemId && field) {
+      const item = (local.items || []).find((x) => x.id === itemId);
+      if (!item) return;
 
-  qs("#btnNewProduct")?.addEventListener("click", () => showProductModal(null, root));
+      if (field === "nome") {
+        item.nome = safeStr(el.value) || "Item";
+      }
+      if (field === "price") {
+        item.unitPrice = clampMoney(parseMoneyInput(el.value));
+        item.total = Number(item.qty || 0) * Number(item.unitPrice || 0);
+      }
+      if (field === "cost") {
+        item.unitCost = clampMoney(parseMoneyInput(el.value));
+        item.totalCusto = Number(item.qty || 0) * Number(item.unitCost || 0);
+      }
 
-  qsa("[data-prod-id]").forEach((btn) => {
-    btn.addEventListener("click", () => {
-      const pid = btn.dataset.prodId;
-      const action = btn.dataset.action;
+      // mantém números atualizados sem re-render total
+      recomputeAndPaint();
+    }
+  });
 
-      if (action === "edit") showProductModal(pid, root);
+  // date/status
+  container.querySelector("#ordDate")?.addEventListener("change", (e) => {
+    local.date = String(e.target.value || todayKey());
+  });
+  container.querySelector("#ordEntrega")?.addEventListener("change", (e) => {
+    local.entrega = String(e.target.value || todayKey());
+  });
+  container.querySelector("#ordStatus")?.addEventListener("change", (e) => {
+    local.status = String(e.target.value || "aberta");
+    recomputeAndPaint();
+  });
 
-      if (action === "delete") {
-        if (confirm("Deletar produto?")) {
-          state.products = state.products.filter((p) => p.id !== pid);
-          persist();
-          toast("Produto deletado ✅", "success");
-          renderProducts(root);
+  // salvar
+  container.querySelector("#btnSaveOrder")?.addEventListener("click", () => {
+    // valida
+    local.cliente = safeStr(container.querySelector("#ordCliente")?.value || local.cliente);
+    local.telefone = safeStr(container.querySelector("#ordTel")?.value || local.telefone);
+    local.obs = safeStr(container.querySelector("#ordObs")?.value || local.obs);
+    local.date = safeStr(container.querySelector("#ordDate")?.value || local.date) || todayKey();
+    local.entrega = safeStr(container.querySelector("#ordEntrega")?.value || local.entrega) || todayKey();
+
+    const totalsX = getOrderTotals(local);
+    if (!Array.isArray(local.items) || local.items.length === 0) {
+      return toast("Adicione pelo menos 1 item na encomenda.", "error");
+    }
+    if (totalsX.totalFinal <= 0) return toast("Total inválido. Ajuste itens/preços.", "error");
+    if (local.sinal > totalsX.totalFinal) return toast("Sinal não pode ser maior que o total.", "error");
+
+    commit((st) => {
+      ensureOrdersShape(st);
+      st.orders = Array.isArray(st.orders) ? st.orders : [];
+
+      const idx = st.orders.findIndex((x) => x.id === local.id);
+      if (idx >= 0) st.orders[idx] = local;
+      else st.orders.push(local);
+
+      // opcional: quando marcar como entregue, registrar entrada no caixa se ainda não registrou
+      // (evita duplicar entrada)
+      if (local.status === "entregue") {
+        st.cashMoves = Array.isArray(st.cashMoves) ? st.cashMoves : [];
+        const already = st.cashMoves.find((m) => m?.note === `Encomenda ${local.id}` && m?.tipo !== "saida");
+        if (!already) {
+          // se recebeu sinal antes, consideramos que isso pode ter entrado no caixa na hora do sinal (não controlado aqui).
+          // aqui registramos a entrada do "restante" (aReceber)
+          const rest = Math.max(0, totalsX.totalFinal - Number(local.sinal || 0));
+          if (rest > 0) {
+            const tipo =
+              local.pagamento === "dinheiro" ? "dinheiro" : local.pagamento === "pix" ? "pix" : "cartao";
+            st.cashMoves.push({
+              id: newId(),
+              date: local.date || todayKey(),
+              tipo,
+              valor: rest,
+              createdAt: new Date().toISOString(),
+              note: `Encomenda ${local.id}`,
+            });
+          }
         }
       }
     });
+
+    toast(mode === "edit" ? "Encomenda atualizada ✅" : "Encomenda criada ✅", "success");
+    close();
+    renderOrders(qs("#viewRoot"));
   });
+
+  // deletar
+  container.querySelector("#btnDeleteOrder")?.addEventListener("click", () => {
+    if (!confirm("Tem certeza que deseja excluir esta encomenda?")) return;
+
+    commit((st) => {
+      ensureOrdersShape(st);
+      st.orders = (st.orders || []).filter((x) => x.id !== local.id);
+    });
+
+    toast("Encomenda excluída ✅", "success");
+    close();
+    renderOrders(qs("#viewRoot"));
+  });
+
+  // primeira pintura
+  renderItemsInto();
+  recomputeAndPaint();
 }
 
-function renderProductRow(product) {
-  const margin = Math.round(calcMargin(Number(product.preco || 0), Number(product.custo || 0)));
-  const lucroUn = Number(product.preco || 0) - Number(product.custo || 0);
-  const roi = Math.round(calcROI(lucroUn, Number(product.custo || 0)));
+function renderOrderItems(items) {
+  const list = Array.isArray(items) ? items : [];
+  if (list.length === 0) {
+    return `<div class="muted" style="font-size:12px">Nenhum item adicionado ainda.</div>`;
+  }
 
-  return `
-    <div class="row">
-      <div class="kpi">
-        <b>${escapeHtml(product.nome)}</b>
-        <span>
-          Venda: ${brl(product.preco)} | Custo: ${brl(product.custo)} | Margem: ${margin}% | ROI: ${roi}%
-        </span>
-      </div>
+  return list
+    .map((it) => {
+      const nome = safeStr(it.nome) || "Item";
+      const qty = Number(it.qty || 1);
+      const unitPrice = Number(it.unitPrice || 0);
+      const unitCost = Number(it.unitCost || 0);
 
-      <div style="display:flex;gap:8px;flex-wrap:wrap">
-        <button class="btn btn--small" data-prod-id="${product.id}" data-action="edit" type="button">Editar</button>
-        <button class="btn btn--small btn--danger" data-prod-id="${product.id}" data-action="delete" type="button">Deletar</button>
-      </div>
-    </div>
-  `;
-}
+      return `
+        <div class="cartrow" style="align-items:flex-start;gap:10px">
+          <div style="min-width:0;flex:1">
+            <div style="font-weight:950;font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">
+              ${escapeHtml(nome)}
+            </div>
+            <div class="muted" style="font-size:12px;margin-top:4px">
+              Venda: ${brl(unitPrice)} • Custo: ${brl(unitCost)}
+            </div>
 
-function showProductModal(productId, root) {
-  const product = productId ? state.products.find((p) => p.id === productId) : null;
-  const isEdit = !!product;
+            <div style="height:10px"></div>
 
-  const html = `
-    <div class="modal">
-      <div class="modal__content">
-        <div class="modal__header">
-          <div class="modal__title">${isEdit ? "Editar produto" : "Novo produto"}</div>
-          <button class="modal__close" id="closeModal" type="button">X</button>
-        </div>
-
-        <div class="field">
-          <label class="label">Nome do produto</label>
-          <input type="text" class="input" id="inpNome" placeholder="Ex: Bolo no pote" value="${escapeHtml(
-            product?.nome || ""
-          )}" />
-        </div>
-
-        <div class="fieldgrid mt-12">
-          <div class="field">
-            <label class="label">Preço de venda</label>
-            <input type="text" inputmode="decimal" class="input" id="inpPreco" placeholder="0,00" value="${formatMoneyInput(
-              product?.preco || 0
-            )}" />
+            <div class="fieldgrid" style="grid-template-columns:1fr 1fr;gap:10px">
+              <div class="field">
+                <label class="label" style="font-size:10px">Nome</label>
+                <input class="input" data-oit-id="${escapeHtml(it.id)}" data-oit-field="nome" type="text" value="${escapeHtml(
+        nome
+      )}" />
+              </div>
+              <div class="field">
+                <label class="label" style="font-size:10px">Preço</label>
+                <input class="input" data-oit-id="${escapeHtml(it.id)}" data-oit-field="price" type="text" inputmode="decimal" placeholder="0,00" value="${formatMoneyInput(
+        unitPrice
+      )}" />
+              </div>
+              <div class="field">
+                <label class="label" style="font-size:10px">Custo</label>
+                <input class="input" data-oit-id="${escapeHtml(it.id)}" data-oit-field="cost" type="text" inputmode="decimal" placeholder="0,00" value="${formatMoneyInput(
+        unitCost
+      )}" />
+              </div>
+            </div>
           </div>
 
-          <div class="field">
-            <label class="label">Custo unitário</label>
-            <input type="text" inputmode="decimal" class="input" id="inpCusto" placeholder="0,00" value="${formatMoneyInput(
-              product?.custo || 0
-            )}" />
+          <div style="display:flex;flex-direction:column;gap:8px;align-items:flex-end">
+            <div class="qty">
+              <button class="qbtn" data-oit-op="minus" data-oit-id="${escapeHtml(it.id)}" type="button">−</button>
+              <div class="qnum">${qty}</div>
+              <button class="qbtn" data-oit-op="plus" data-oit-id="${escapeHtml(it.id)}" type="button">+</button>
+            </div>
+
+            <div class="badge" style="font-size:12px">${brl(Number(it.total || qty * unitPrice))}</div>
+            <button class="btn btn--small" data-oit-op="del" data-oit-id="${escapeHtml(it.id)}" type="button">🗑️</button>
           </div>
         </div>
-
-        <div class="card section" style="background:rgba(46,229,157,0.08);border-color:rgba(46,229,157,0.25);margin-top:12px">
-          <div class="row">
-            <div class="kpi"><b>Margem</b><span>Lucro por unidade</span></div>
-            <div class="value" id="marginDisplay">0%</div>
-          </div>
-        </div>
-
-        <div style="height:12px"></div>
-        <button class="btn btn--brand" id="btnSaveProduct" style="width:100%" type="button">Salvar produto</button>
-
-        ${
-          isEdit
-            ? `
-          <div style="height:8px"></div>
-          <button class="btn btn--danger" id="btnDeleteProduct" style="width:100%" type="button">Deletar produto</button>
-        `
-            : ""
-        }
-      </div>
-    </div>
-  `;
-
-  const container = qs("#modalContainer");
-  container.innerHTML = html;
-
-  const modal = container.querySelector(".modal");
-  container.querySelector("#closeModal")?.addEventListener("click", () => modal?.remove());
-  modal?.addEventListener("click", (e) => {
-    if (e.target === modal) modal.remove();
-  });
-
-  const inpPreco = container.querySelector("#inpPreco");
-  const inpCusto = container.querySelector("#inpCusto");
-  const marginDisplay = container.querySelector("#marginDisplay");
-
-  const updateMargin = () => {
-    const preco = parseMoneyInput(inpPreco?.value || "0");
-    const custo = parseMoneyInput(inpCusto?.value || "0");
-    const margin = Math.round(calcMargin(preco, custo));
-    if (marginDisplay) marginDisplay.textContent = `${margin}%`;
-  };
-
-  inpPreco?.addEventListener("input", updateMargin);
-  inpCusto?.addEventListener("input", updateMargin);
-  updateMargin();
-
-  container.querySelector("#btnSaveProduct")?.addEventListener("click", () => {
-    const nome = (container.querySelector("#inpNome")?.value || "").trim();
-    const preco = parseMoneyInput(container.querySelector("#inpPreco")?.value || "0");
-    const custo = parseMoneyInput(container.querySelector("#inpCusto")?.value || "0");
-
-    if (!nome) return toast("Preencha o nome do produto", "error");
-    if (!Number.isFinite(preco) || preco <= 0) return toast("Preço inválido", "error");
-    if (!Number.isFinite(custo) || custo < 0) return toast("Custo inválido", "error");
-
-    if (isEdit) {
-      const idx = state.products.findIndex((p) => p.id === productId);
-      if (idx >= 0) state.products[idx] = { ...product, nome, preco, custo };
-    } else {
-      state.products.push({ id: newId(), nome, preco, custo });
-    }
-
-    persist();
-    modal?.remove();
-    toast(`Produto ${isEdit ? "atualizado" : "criado"} ✅`, "success");
-    renderProducts(root);
-  });
-
-  container.querySelector("#btnDeleteProduct")?.addEventListener("click", () => {
-    if (confirm("Deletar produto?")) {
-      state.products = state.products.filter((p) => p.id !== productId);
-      persist();
-      modal?.remove();
-      toast("Produto deletado ✅", "success");
-      renderProducts(root);
-    }
-  });
+      `;
+    })
+    .join("");
 }
 
 /* =========================================================
-   REPORTS
+   ✅ REPORTS (RELATÓRIOS) — COMPLETO
 ========================================================= */
-function renderReports(root) {
-  const sales = state.sales || [];
-  const orders = state.orders || [];
 
-  const today = getTodaySummary();
-  const month = getMonthSummary();
-  const year = getYearSummary();
+function renderReports(root) {
+  state = getState();
+  state.ui = state.ui || {};
+  state.ui.reportsRange = state.ui.reportsRange || "month"; // today | month | year
+  const range = state.ui.reportsRange;
+
+  const { salesInRange, label } = getSalesByRange(range);
+
+  const faturamento = salesInRange.reduce((a, x) => a + Number(x.totalVenda || 0), 0);
+  const custos = salesInRange.reduce((a, x) => a + Number(x.totalCusto || 0), 0);
+  const taxas = salesInRange.reduce((a, x) => a + Number(x.taxaCartao || 0), 0);
+  const lucro = calcProfit(faturamento, custos, taxas);
+
+  const margem = calcMargin(lucro, faturamento);
+  const roi = calcROI(lucro, custos);
+
+  const top = getTopProductsFromSales(salesInRange).slice(0, 10);
 
   const html = `
     <div class="h1">📈 Relatórios</div>
 
     <section class="card section">
-      <div style="font-weight:900;margin-bottom:10px">📊 Resumo de vendas</div>
-
-      <div class="row">
-        <div class="kpi"><b>Vendas hoje</b><span>Quantidade</span></div>
-        <div class="badge">${sales.filter((s) => s.date === todayKey()).length}</div>
-      </div>
-
-      <div class="row">
-        <div class="kpi"><b>Faturamento hoje</b><span>Total</span></div>
-        <div class="badge">${brl(today.faturamento)}</div>
-      </div>
-
-      <div class="row">
-        <div class="kpi"><b>Lucro hoje</b><span>Real</span></div>
-        <div class="badge badge--good">${brl(today.lucro)}</div>
-      </div>
-    </section>
-
-    <div style="height:12px"></div>
-
-    <section class="card section">
-      <div style="font-weight:900;margin-bottom:10px">📅 Resumo do mês</div>
-
-      <div class="row">
-        <div class="kpi"><b>Vendas mês</b><span>Quantidade</span></div>
-        <div class="badge">${sales.filter((s) => String(s.date || "").startsWith(monthKey())).length}</div>
-      </div>
-
-      <div class="row">
-        <div class="kpi"><b>Faturamento mês</b><span>Total</span></div>
-        <div class="badge">${brl(month.faturamento)}</div>
-      </div>
-
-      <div class="row">
-        <div class="kpi"><b>Lucro mês</b><span>Real</span></div>
-        <div class="badge badge--good">${brl(month.lucro)}</div>
-      </div>
-    </section>
-
-    <div style="height:12px"></div>
-
-    <section class="card section">
-      <div style="font-weight:900;margin-bottom:10px">📈 Resumo do ano</div>
-
-      <div class="row">
-        <div class="kpi"><b>Vendas ano</b><span>Quantidade</span></div>
-        <div class="badge">${sales.filter((s) => String(s.date || "").startsWith(yearKey())).length}</div>
-      </div>
-
-      <div class="row">
-        <div class="kpi"><b>Faturamento ano</b><span>Total</span></div>
-        <div class="badge">${brl(year.faturamento)}</div>
-      </div>
-
-      <div class="row">
-        <div class="kpi"><b>Lucro ano</b><span>Real</span></div>
-        <div class="badge badge--good">${brl(year.lucro)}</div>
-      </div>
-    </section>
-
-    <div style="height:12px"></div>
-
-    <section class="card section">
-      <div style="font-weight:900;margin-bottom:10px">📦 Encomendas</div>
-
-      <div class="row">
-        <div class="kpi"><b>Total de encomendas</b><span>Todas</span></div>
-        <div class="badge">${orders.length}</div>
-      </div>
-
-      <div class="row">
-        <div class="kpi"><b>Abertas</b><span>Aguardando</span></div>
-        <div class="badge badge--warn">${orders.filter((o) => o.status === "aberta").length}</div>
-      </div>
-
-      <div class="row">
-        <div class="kpi"><b>Entregues</b><span>Concluídas</span></div>
-        <div class="badge badge--good">${orders.filter((o) => o.status === "entregue").length}</div>
-      </div>
-
-      <div class="row">
-        <div class="kpi"><b>Canceladas</b><span>Perdidas</span></div>
-        <div class="badge badge--bad">${orders.filter((o) => o.status === "cancelada").length}</div>
-      </div>
-    </section>
-  `;
-
-  root.innerHTML = html;
-}
-
-/* =========================================================
-   MORE
-========================================================= */
-function renderMore(root) {
-  const isAuthOn = !!state.auth?.enabled;
-
-  const html = `
-    <div class="h1">⚙️ Mais</div>
-
-    <section class="card section">
-      <div style="font-weight:900;margin-bottom:10px">🏷️ Confeitaria</div>
-
-      <div class="field">
-        <label class="label">Nome da confeitaria</label>
-        <input type="text" class="input" id="inpStoreName" placeholder="Ex: Doces da Ana" value="${escapeHtml(
-          state.storeName || ""
-        )}" />
-      </div>
-
-      <div style="height:10px"></div>
-      <button class="btn btn--brand" id="btnSaveStoreName" style="width:100%" type="button">Salvar nome</button>
-    </section>
-
-    <div style="height:12px"></div>
-
-    <section class="card section">
-      <div style="font-weight:900;margin-bottom:10px">🔐 Login</div>
-
-      <div class="row">
-        <div class="kpi">
-          <b>Modo</b>
-          <span>${state.auth.mode === "supabase" ? "Supabase (e-mail/senha)" : "PIN (local)"}</span>
+      <div style="display:flex;justify-content:space-between;align-items:flex-end;gap:10px;flex-wrap:wrap">
+        <div>
+          <div style="font-weight:900">Resumo financeiro</div>
+          <div class="muted" style="font-size:12px;margin-top:4px">${escapeHtml(label)}</div>
         </div>
-        <button class="btn btn--small" id="btnToggleMode" type="button">Trocar</button>
       </div>
 
+      <div style="height:12px"></div>
+
+      <div class="pillrow">
+        <button class="pill ${range === "today" ? "is-active" : ""}" data-repr="today" type="button">Hoje</button>
+        <button class="pill ${range === "month" ? "is-active" : ""}" data-repr="month" type="button">Mês</button>
+        <button class="pill ${range === "year" ? "is-active" : ""}" data-repr="year" type="button">Ano</button>
+      </div>
+    </section>
+
+    <div style="height:12px"></div>
+
+    <section class="stats">
+      <div class="card stat">
+        <div style="font-size:24px;margin-bottom:8px">💰</div>
+        <div class="stat__label">Faturamento</div>
+        <div class="stat__value">${brl(faturamento)}</div>
+      </div>
+
+      <div class="card stat">
+        <div style="font-size:24px;margin-bottom:8px">📉</div>
+        <div class="stat__label">Custos</div>
+        <div class="stat__value">${brl(custos)}</div>
+      </div>
+
+      <div class="card stat">
+        <div style="font-size:24px;margin-bottom:8px">💳</div>
+        <div class="stat__label">Taxas</div>
+        <div class="stat__value">${brl(taxas)}</div>
+      </div>
+
+      <div class="card stat">
+        <div style="font-size:24px;margin-bottom:8px">✨</div>
+        <div class="stat__label">Lucro</div>
+        <div class="stat__value">${brl(lucro)}</div>
+      </div>
+    </section>
+
+    <div style="height:12px"></div>
+
+    <section class="card">
+      <div class="row">
+        <div class="kpi"><b>Margem</b><span>Lucro / Faturamento</span></div>
+        <div class="badge badge--info">${Number.isFinite(margem) ? (margem * 100).toFixed(1) + "%" : "—"}</div>
+      </div>
+      <div class="row">
+        <div class="kpi"><b>ROI</b><span>Lucro / Custos</span></div>
+        <div class="badge badge--good">${Number.isFinite(roi) ? (roi * 100).toFixed(1) + "%" : "—"}</div>
+      </div>
+    </section>
+
+    <div style="height:12px"></div>
+
+    <section class="card section">
+      <div style="font-weight:900;margin-bottom:8px">🏆 Produtos mais vendidos</div>
       ${
-        state.auth.mode === "supabase"
-          ? `
-        <div style="height:10px"></div>
-        <button class="btn btn--danger" id="btnLogout" style="width:100%" type="button">Sair (logout)</button>
-      `
+        top.length === 0
+          ? `<div class="muted" style="font-size:12px">Nenhuma venda encontrada nesse período.</div>`
           : `
-        <div class="row">
-          <div class="kpi">
-            <b>Proteção por PIN</b>
-            <span>${isAuthOn ? "Ativado" : "Desativado"}</span>
-          </div>
-          <button class="btn btn--small" id="btnTogglePin" type="button">${isAuthOn ? "Desativar" : "Ativar"}</button>
-        </div>
-
-        <div class="field mt-12">
-          <label class="label">Definir/alterar PIN</label>
-          <input type="password" inputmode="numeric" class="input" id="inpPinSet" placeholder="Ex: 1234" value="" />
-          <div class="muted" style="font-size:12px;margin-top:6px">Dica: use 4 a 8 números.</div>
-        </div>
-
-        <div style="height:10px"></div>
-        <button class="btn" id="btnSavePin" style="width:100%" type="button">Salvar PIN</button>
-
-        ${isAuthOn ? `<div style="height:8px"></div>
-        <button class="btn" id="btnLockNow" style="width:100%" type="button">🔒 Bloquear agora</button>` : ""}
-      `
+            <table class="table">
+              <thead>
+                <tr>
+                  <th>Produto</th>
+                  <th>Qtd</th>
+                  <th style="text-align:right">Faturamento</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${top
+                  .map(
+                    (t) => `
+                    <tr>
+                      <td>${escapeHtml(t.nome)}</td>
+                      <td>${t.qtd}</td>
+                      <td style="text-align:right">${brl(t.total)}</td>
+                    </tr>
+                  `
+                  )
+                  .join("")}
+              </tbody>
+            </table>
+          `
       }
     </section>
 
     <div style="height:12px"></div>
 
     <section class="card section">
-      <div style="font-weight:900;margin-bottom:10px">🧹 Dados</div>
-      <button class="btn btn--danger" id="btnClearData" style="width:100%" type="button">🗑️ Limpar todos os dados</button>
-    </section>
-
-    <div style="height:12px"></div>
-
-    <section class="card section">
-      <div style="font-weight:900;margin-bottom:10px">ℹ️ Sobre</div>
-      <div class="row">
-        <div class="kpi"><b>Doce Lucro</b><span>v1.0.2</span></div>
-      </div>
-      <div class="row">
-        <div class="kpi"><b>Armazenamento</b><span>Local (offline) + Login Supabase</span></div>
-      </div>
+      <div style="font-weight:900;margin-bottom:8px">🧾 Vendas no período</div>
+      ${renderSalesTable(salesInRange)}
     </section>
   `;
 
   root.innerHTML = html;
 
-  qs("#btnSaveStoreName")?.addEventListener("click", () => {
-    const name = String(qs("#inpStoreName")?.value || "").trim();
-    state.storeName = name;
-    persist();
-    setBrand(state.storeName || "");
-    toast("Nome salvo ✅", "success");
+  if (!reportsBound) {
+    reportsBound = true;
+
+    root.addEventListener("click", (e) => {
+      if (getState().route !== "reports") return;
+      const t = e.target;
+      const btn = t.closest?.("[data-repr]");
+      if (!btn) return;
+
+      const v = btn.dataset.repr || "month";
+      commit((s) => {
+        s.ui = s.ui || {};
+        s.ui.reportsRange = v;
+      });
+      renderReports(root);
+    });
+  }
+}
+
+function getSalesByRange(range) {
+  const s = getState();
+  const sales = Array.isArray(s.sales) ? s.sales : [];
+  const tk = todayKey();
+  const mk = monthKey();
+  const yk = yearKey();
+
+  if (range === "today") {
+    return {
+      label: `Período: hoje (${fmtDateBR(tk)})`,
+      salesInRange: sales.filter((x) => x.date === tk),
+    };
+  }
+  if (range === "year") {
+    return {
+      label: `Período: ano (${yk})`,
+      salesInRange: sales.filter((x) => String(x.date || "").startsWith(yk)),
+    };
+  }
+
+  return {
+    label: `Período: mês (${mk})`,
+    salesInRange: sales.filter((x) => String(x.date || "").startsWith(mk)),
+  };
+}
+
+function getTopProductsFromSales(sales) {
+  const map = new Map();
+  (sales || []).forEach((sale) => {
+    (sale.items || []).forEach((it) => {
+      const key = it.id || it.prodId || it.nome;
+      const prev = map.get(key) || { nome: it.nome || "Produto", qtd: 0, total: 0 };
+      prev.qtd += Number(it.qty || 0);
+      prev.total += Number(it.qty || 0) * Number(it.unitPrice || 0);
+      map.set(key, prev);
+    });
   });
 
-  qs("#btnToggleMode")?.addEventListener("click", () => {
-    state.auth.mode = state.auth.mode === "supabase" ? "pin" : "supabase";
-    persist();
-    toast("Modo alterado ✅", "success");
-    renderMore(root);
-  });
+  return Array.from(map.values()).sort((a, b) => b.total - a.total);
+}
 
-  qs("#btnLogout")?.addEventListener("click", async () => {
-    const { error } = await supabase.auth.signOut();
-    if (error) return toast(error.message, "error");
-    session = null;
-    cloudUserId = null;
-    toast("Saiu ✅", "success");
-    render(state.route || "home");
-  });
+function renderSalesTable(sales) {
+  const list = Array.isArray(sales) ? sales : [];
+  if (list.length === 0) {
+    return `<div class="muted" style="font-size:12px">Nenhuma venda nesse período.</div>`;
+  }
 
-  qs("#btnTogglePin")?.addEventListener("click", () => {
-    const enable = !(state.auth?.enabled === true);
-
-    if (enable) {
-      if (!state.auth.pin) return toast("Defina um PIN antes de ativar.", "error");
-      state.auth.enabled = true;
-      state.auth.unlocked = true;
-      persist();
-      toast("Login PIN ativado ✅", "success");
-      renderMore(root);
-      return;
-    }
-
-    if (confirm("Desativar o login por PIN?")) {
-      state.auth.enabled = false;
-      state.auth.unlocked = true;
-      persist();
-      toast("Login PIN desativado ✅", "success");
-      renderMore(root);
-    }
-  });
-
-  qs("#btnSavePin")?.addEventListener("click", () => {
-    const pin = String(qs("#inpPinSet")?.value || "").trim();
-    const onlyDigits = pin.replace(/\D/g, "");
-    if (onlyDigits.length < 4 || onlyDigits.length > 8) return toast("PIN inválido. Use 4 a 8 números.", "error");
-    state.auth.pin = onlyDigits;
-    persist();
-    toast("PIN salvo ✅", "success");
-  });
-
-  qs("#btnLockNow")?.addEventListener("click", () => {
-    state.auth.unlocked = false;
-    persist();
-    toast("Bloqueado 🔒", "info");
-    render(state.route || "home");
-  });
-
-  qs("#btnClearData")?.addEventListener("click", () => {
-    if (confirm("⚠️ Tem certeza? Isso vai DELETAR TODOS os dados!")) {
-      const keepTheme = state.theme;
-      const keepStore = state.storeName;
-      const keepAuth = state.auth;
-
-      state = normalizeState(getDefaultState());
-      state.theme = keepTheme;
-      state.storeName = keepStore;
-      state.auth = keepAuth;
-
-      persist();
-      setBrand(state.storeName || "");
-      toast("Dados limpos ✅", "success");
-      renderMore(root);
-    }
-  });
+  return `
+    <table class="table">
+      <thead>
+        <tr>
+          <th>Data</th>
+          <th>Pagamento</th>
+          <th style="text-align:right">Total</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${list
+          .slice()
+          .sort((a, b) => String(b.date || "").localeCompare(String(a.date || "")))
+          .map(
+            (x) => `
+          <tr>
+            <td>${escapeHtml(fmtDateBR(x.date))}</td>
+            <td>${escapeHtml(x.metodo || "-")}</td>
+            <td style="text-align:right">${brl(Number(x.totalVenda || 0))}</td>
+          </tr>
+        `
+          )
+          .join("")}
+      </tbody>
+    </table>
+  `;
 }
 
 /* =========================================================
-   DRAFT HELPERS (ENCOMENDAS)
+   ✅ MORE (AJUSTES) — útil de verdade
 ========================================================= */
-function draftKeyForOrder(orderId) {
-  return orderId ? `edit:${orderId}` : "new";
-}
 
-function getOrderDraft(orderId, baseOrder = null) {
-  const key = draftKeyForOrder(orderId);
-  const draft = (state.ui.orderDraftForm || {})[key];
+function renderMore(root) {
+  state = getState();
+  state.auth = state.auth || {};
+  state.ui = state.ui || {};
 
-  if (draft && typeof draft === "object") return { ...draft };
+  const mode = state.auth?.mode || "supabase";
 
-  const init = {
-    cliente: baseOrder?.cliente || "",
-    whats: baseOrder?.whats || "",
-    dataRetirada: baseOrder?.dataRetirada || "",
-    taxaEntrega: Number(baseOrder?.taxaEntrega || 0),
-    sinal: Number(baseOrder?.sinal || 0),
-    status: baseOrder?.status || "aberta",
-    metodoSinal: baseOrder?.metodoSinal || "pix",
-    metodoRestante: baseOrder?.metodoRestante || "pix",
-  };
+  const html = `
+    <div class="h1">⚙️ Mais</div>
 
-  setOrderDraft(orderId, init);
-  return init;
-}
+    <section class="card section">
+      <div style="font-weight:900;margin-bottom:8px">Configurações</div>
+      <div class="muted" style="font-size:12px;margin-bottom:14px">Ajustes do app e segurança.</div>
 
-function setOrderDraft(orderId, patch) {
-  const key = draftKeyForOrder(orderId);
-  const box = state.ui.orderDraftForm && typeof state.ui.orderDraftForm === "object" ? state.ui.orderDraftForm : {};
-  box[key] = { ...(box[key] || {}), ...(patch || {}) };
-  state.ui.orderDraftForm = box;
-  persist();
-}
+      <div class="row" style="border-top:0">
+        <div class="kpi"><b>👤 Sincronização</b><span>${mode === "supabase" ? "Supabase" : mode === "pin" ? "PIN" : "Local"}</span></div>
+        <div class="badge badge--info">${getUserId() ? "Conectado" : "Offline"}</div>
+      </div>
 
-function clearOrderDraft(orderId) {
-  const key = draftKeyForOrder(orderId);
-  const box = state.ui.orderDraftForm && typeof state.ui.orderDraftForm === "object" ? state.ui.orderDraftForm : {};
-  if (box[key]) delete box[key];
-  state.ui.orderDraftForm = box;
-  persist();
+      <div style="height:10px"></div>
+
+      <button class="btn" id="btnLogout" style="width:100%" type="button">Sair</button>
+      <div style="height:8px"></div>
+      <button class="btn" id="btnResetLocal" style="width:100%" type="button">Resetar dados locais</button>
+    </section>
+
+    <div style="height:12px"></div>
+
+    <section class="card section">
+      <div style="font-weight:900;margin-bottom:8px">🔐 PIN (opcional)</div>
+      <div class="muted" style="font-size:12px;margin-bottom:12px">Se quiser travar o app com um PIN.</div>
+
+      <div class="field">
+        <label class="label">Ativar PIN</label>
+        <select class="select" id="pinEnabled">
+          <option value="nao" ${state.auth?.enabled ? "" : "selected"}>Não</option>
+          <option value="sim" ${state.auth?.enabled ? "selected" : ""}>Sim</option>
+        </select>
+      </div>
+
+      <div class="field mt-12">
+        <label class="label">PIN</label>
+        <input class="input" id="pinValue" type="password" inputmode="numeric" placeholder="••••" value="${escapeHtml(
+          state.auth?.pin || ""
+        )}" />
+      </div>
+
+      <div style="height:12px"></div>
+      <button class="btn btn--brand" id="btnSavePin" style="width:100%" type="button">Salvar PIN</button>
+    </section>
+  `;
+
+  root.innerHTML = html;
+
+  if (!moreBound) {
+    moreBound = true;
+
+    root.addEventListener("click", async (e) => {
+      if (getState().route !== "more") return;
+      const t = e.target;
+
+      if (t.closest?.("#btnLogout")) {
+        try {
+          await supabase.auth.signOut();
+          toast("Saiu ✅", "success");
+        } catch (err) {
+          toast("Erro ao sair", "error");
+        }
+        return;
+      }
+
+      if (t.closest?.("#btnResetLocal")) {
+        if (!confirm("Isso vai apagar os dados locais deste navegador. Continuar?")) return;
+
+        try {
+          localStorage.clear();
+        } catch {}
+
+        toast("Dados locais resetados. Recarregando...", "info");
+        setTimeout(() => window.location.reload(), 600);
+        return;
+      }
+
+      if (t.closest?.("#btnSavePin")) {
+        const enabled = String(qs("#pinEnabled")?.value || "nao") === "sim";
+        const pin = String(qs("#pinValue")?.value || "").trim();
+
+        if (enabled && (!pin || pin.length < 4)) return toast("Defina um PIN de pelo menos 4 dígitos.", "error");
+
+        commit((s) => {
+          s.auth = s.auth || {};
+          s.auth.mode = "pin";
+          s.auth.enabled = enabled;
+          s.auth.pin = pin;
+          s.auth.unlocked = !enabled; // se desativou, destrava
+        });
+
+        toast("PIN atualizado ✅", "success");
+        renderMore(root);
+        return;
+      }
+    });
+  }
 }
 
 /* =========================================================
@@ -2276,7 +2056,6 @@ function bindMoneyInputClearOnFocus(root, ids = []) {
         el.value = "";
         return;
       }
-
       try {
         el.select();
       } catch {}
@@ -2328,7 +2107,7 @@ function bindGlobalMoneyUX() {
 }
 
 /* =========================================================
-   HELPERS
+   HELPERS (cálculo)
 ========================================================= */
 
 function radioPill(_name, value, label, checked) {
@@ -2342,39 +2121,6 @@ function radioPill(_name, value, label, checked) {
       ${escapeHtml(label)}
     </button>
   `;
-}
-
-function escapeHtml(text) {
-  const map = { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#039;" };
-  return String(text ?? "").replace(/[&<>"']/g, (m) => map[m]);
-}
-
-function parseMoneyInput(value) {
-  if (value === null || value === undefined) return 0;
-  let str = String(value).trim();
-  if (!str) return 0;
-
-  str = str.replace(/[^\d.,-]/g, "");
-
-  const hasComma = str.includes(",");
-  const hasDot = str.includes(".");
-
-  if (hasComma && hasDot) {
-    const lastComma = str.lastIndexOf(",");
-    const lastDot = str.lastIndexOf(".");
-    if (lastComma > lastDot) str = str.replace(/\./g, "").replace(",", ".");
-    else str = str.replace(/,/g, "");
-  } else if (hasComma) {
-    str = str.replace(/\./g, "").replace(",", ".");
-  }
-
-  const num = parseFloat(str);
-  return Number.isFinite(num) ? num : 0;
-}
-
-function formatMoneyInput(value) {
-  const num = Number(value || 0);
-  return num.toFixed(2).replace(".", ",");
 }
 
 function computeCartTotals(cart, products, metodo, desconto, acrescimo) {
@@ -2396,7 +2142,12 @@ function cartToItems(cart, products) {
       const prod = (products || []).find((p) => p.id === prodId);
       if (!prod) return null;
 
-      return { ...prod, qty: Number(qty || 0), unitPrice: Number(prod.preco || 0), unitCost: Number(prod.custo || 0) };
+      return {
+        ...prod,
+        qty: Number(qty || 0),
+        unitPrice: Number(prod.preco || 0),
+        unitCost: Number(prod.custo || 0),
+      };
     })
     .filter(Boolean);
 }
@@ -2417,57 +2168,44 @@ function restoreFocusState(snap) {
   } catch (_) {}
 }
 
-function todayKey() {
-  return new Date().toISOString().slice(0, 10);
-}
-function monthKey() {
-  return new Date().toISOString().slice(0, 7);
-}
-function yearKey() {
-  return new Date().toISOString().slice(0, 4);
-}
+/* =========================================================
+   Resumos (home)
+========================================================= */
 
 function getTodaySummary() {
   const key = todayKey();
-  const sales = (state.sales || []).filter((s) => s.date === key);
-  const faturamento = sales.reduce((a, s) => a + Number(s.totalVenda || 0), 0);
-  const custos = sales.reduce((a, s) => a + Number(s.totalCusto || 0), 0);
-  const taxas = sales.reduce((a, s) => a + Number(s.taxaCartao || 0), 0);
+  const s = getState();
+  const sales = (s.sales || []).filter((x) => x.date === key);
+  const faturamento = sales.reduce((a, x) => a + Number(x.totalVenda || 0), 0);
+  const custos = sales.reduce((a, x) => a + Number(x.totalCusto || 0), 0);
+  const taxas = sales.reduce((a, x) => a + Number(x.taxaCartao || 0), 0);
   const lucro = calcProfit(faturamento, custos, taxas);
   return { faturamento, custos, taxas, lucro };
 }
 
 function getMonthSummary() {
   const key = monthKey();
-  const sales = (state.sales || []).filter((s) => String(s.date || "").startsWith(key));
-  const faturamento = sales.reduce((a, s) => a + Number(s.totalVenda || 0), 0);
-  const custos = sales.reduce((a, s) => a + Number(s.totalCusto || 0), 0);
-  const taxas = sales.reduce((a, s) => a + Number(s.taxaCartao || 0), 0);
-  const lucro = calcProfit(faturamento, custos, taxas);
-  return { faturamento, custos, taxas, lucro };
-}
-
-function getYearSummary() {
-  const key = yearKey();
-  const sales = (state.sales || []).filter((s) => String(s.date || "").startsWith(key));
-  const faturamento = sales.reduce((a, s) => a + Number(s.totalVenda || 0), 0);
-  const custos = sales.reduce((a, s) => a + Number(s.totalCusto || 0), 0);
-  const taxas = sales.reduce((a, s) => a + Number(s.taxaCartao || 0), 0);
+  const s = getState();
+  const sales = (s.sales || []).filter((x) => String(x.date || "").startsWith(key));
+  const faturamento = sales.reduce((a, x) => a + Number(x.totalVenda || 0), 0);
+  const custos = sales.reduce((a, x) => a + Number(x.totalCusto || 0), 0);
+  const taxas = sales.reduce((a, x) => a + Number(x.taxaCartao || 0), 0);
   const lucro = calcProfit(faturamento, custos, taxas);
   return { faturamento, custos, taxas, lucro };
 }
 
 function getLast7DaysSummary() {
+  const s = getState();
   const days = [];
   for (let i = 6; i >= 0; i--) {
     const d = new Date();
     d.setDate(d.getDate() - i);
     const key = d.toISOString().slice(0, 10);
 
-    const sales = (state.sales || []).filter((s) => s.date === key);
-    const faturamento = sales.reduce((a, s) => a + Number(s.totalVenda || 0), 0);
-    const custos = sales.reduce((a, s) => a + Number(s.totalCusto || 0), 0);
-    const taxas = sales.reduce((a, s) => a + Number(s.taxaCartao || 0), 0);
+    const sales = (s.sales || []).filter((x) => x.date === key);
+    const faturamento = sales.reduce((a, x) => a + Number(x.totalVenda || 0), 0);
+    const custos = sales.reduce((a, x) => a + Number(x.totalCusto || 0), 0);
+    const taxas = sales.reduce((a, x) => a + Number(x.taxaCartao || 0), 0);
     const lucro = calcProfit(faturamento, custos, taxas);
 
     days.push({ date: key, faturamento, custos, taxas, lucro });
@@ -2510,8 +2248,9 @@ function renderWeekTable(week) {
 }
 
 function getOpenOrdersToReceive() {
-  const orders = (state.orders || []).filter((o) => o.status === "aberta");
-  return orders.reduce((a, o) => a + Math.max(0, Number(o.total || 0) - Number(o.sinal || 0)), 0);
+  const s = getState();
+  const orders = (s.orders || []).filter((o) => (o.status || "aberta") === "aberta");
+  return orders.reduce((a, o) => a + Math.max(0, getOrderTotals(o).aReceber), 0);
 }
 
 function getRemainingDaysInMonth() {
@@ -2521,7 +2260,8 @@ function getRemainingDaysInMonth() {
 }
 
 function getCashSummaryForDate(date) {
-  const moves = (state.cashMoves || []).filter((m) => m.date === date);
+  const s = getState();
+  const moves = (s.cashMoves || []).filter((m) => m.date === date);
 
   const dinheiro = moves.filter((m) => m.tipo === "dinheiro").reduce((a, m) => a + Number(m.valor || 0), 0);
   const pix = moves.filter((m) => m.tipo === "pix").reduce((a, m) => a + Number(m.valor || 0), 0);
@@ -2534,28 +2274,13 @@ function getCashSummaryForDate(date) {
   return { dinheiro, pix, cartao, entradasTotal, saidas, saldo };
 }
 
-function toast(message, type = "info") {
-  let existing = qs(".dl-toast");
-  if (existing) existing.remove();
-
-  const el = document.createElement("div");
-  el.className = `dl-toast dl-toast--${type} is-visible`;
-  el.textContent = message;
-  document.body.appendChild(el);
-
-  setTimeout(() => {
-    el.classList.remove("is-visible");
-    setTimeout(() => el.remove(), 200);
-  }, 3000);
-}
-
 /* =========================================================
    START
 ========================================================= */
 mount();
 
 /* =========================================================
-   PWA / SERVICE WORKER — Vercel safe + iOS safe (FIX CACHE STUCK)
+   PWA / SERVICE WORKER (mantém o seu)
 ========================================================= */
 if ("serviceWorker" in navigator) {
   window.addEventListener("load", async () => {
@@ -2567,7 +2292,8 @@ if ("serviceWorker" in navigator) {
         const regs = await navigator.serviceWorker.getRegistrations();
         await Promise.all(
           regs.map(async (r) => {
-            const activeUrl = r?.active?.scriptURL || r?.installing?.scriptURL || r?.waiting?.scriptURL || "";
+            const activeUrl =
+              r?.active?.scriptURL || r?.installing?.scriptURL || r?.waiting?.scriptURL || "";
             if (activeUrl && activeUrl !== swUrl) {
               await r.unregister();
             }

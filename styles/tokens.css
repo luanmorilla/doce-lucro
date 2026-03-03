@@ -1,0 +1,106 @@
+/* =========================================================
+   DOCE LUCRO — TOKENS / THEME
+   - Variáveis, cores, sombras, radii, safe-area
+========================================================= */
+
+:root {
+    --bg: #070a14;
+    --bg2: #0b0f1a;
+    --bg3: #0f1420;
+  
+    /* glass/cards */
+    --card: rgba(255, 255, 255, 0.065);
+    --card2: rgba(255, 255, 255, 0.035);
+    --stroke: rgba(255, 255, 255, 0.11);
+    --stroke2: rgba(255, 255, 255, 0.18);
+  
+    /* text */
+    --text: rgba(255, 255, 255, 0.94);
+    --muted: rgba(255, 255, 255, 0.66);
+    --muted2: rgba(255, 255, 255, 0.5);
+  
+    /* brand */
+    --brand: #ff4fa3;
+    --brand2: #7c5cff;
+  
+    /* status */
+    --good: #2ee59d;
+    --bad: #ff5d5d;
+    --warn: #ffd166;
+    --info: #4db8ff;
+  
+    /* shadows */
+    --shadow: 0 20px 70px rgba(0, 0, 0, 0.55);
+    --shadowSoft: 0 10px 34px rgba(0, 0, 0, 0.32);
+    --shadowMed: 0 10px 30px rgba(0, 0, 0, 0.34);
+  
+    /* radii */
+    --r: 22px;
+    --r2: 16px;
+    --r3: 12px;
+  
+    /* safe area */
+    --safeTop: max(env(safe-area-inset-top, 0px), 0px);
+    --safeBottom: max(env(safe-area-inset-bottom, 0px), 12px);
+  
+    --maxw: 1060px;
+  
+    /* focus ring */
+    --ring: 0 0 0 4px rgba(255, 79, 163, 0.18);
+  
+    /* glass */
+    --glass: blur(18px);
+  
+    /* motion */
+    --transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+  
+    /* NAV sizing */
+    --nav-gap: 10px;
+    --nav-h: 78px;
+  
+    /* sizing helpers */
+    --tap: 44px;
+    --tap2: 46px;
+  
+    /* subtle highlight */
+    --hl: rgba(255, 255, 255, 0.06);
+    --hl2: rgba(255, 255, 255, 0.1);
+  
+    /* modal overlay */
+    --overlay: rgba(0, 0, 0, 0.55);
+  
+    /* danger */
+    --danger1: #ff4d6d;
+    --danger2: #ff7a59;
+    --dangerGlow1: rgba(255, 77, 109, 0.22);
+    --dangerGlow2: rgba(255, 122, 89, 0.18);
+  }
+  
+  :root[data-theme="light"] {
+    --bg: #f6f7fb;
+    --bg2: #ffffff;
+    --bg3: #fafbfe;
+  
+    --card: rgba(0, 0, 0, 0.045);
+    --card2: rgba(0, 0, 0, 0.028);
+    --stroke: rgba(0, 0, 0, 0.1);
+    --stroke2: rgba(0, 0, 0, 0.16);
+  
+    --text: rgba(0, 0, 0, 0.9);
+    --muted: rgba(0, 0, 0, 0.62);
+    --muted2: rgba(0, 0, 0, 0.48);
+  
+    --shadow: 0 16px 50px rgba(0, 0, 0, 0.1);
+    --shadowSoft: 0 10px 30px rgba(0, 0, 0, 0.08);
+    --shadowMed: 0 8px 22px rgba(0, 0, 0, 0.1);
+  
+    --ring: 0 0 0 4px rgba(124, 92, 255, 0.14);
+  
+    --hl: rgba(0, 0, 0, 0.035);
+    --hl2: rgba(0, 0, 0, 0.06);
+  
+    --overlay: rgba(0, 0, 0, 0.45);
+  
+    --dangerGlow1: rgba(255, 77, 109, 0.16);
+    --dangerGlow2: rgba(255, 122, 89, 0.12);
+  }
