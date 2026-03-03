@@ -3,39 +3,44 @@
 <head>
   <meta charset="utf-8" />
 
-  <!-- Viewport (suporte notch iPhone + Android) -->
-  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <!-- ✅ Viewport (iPhone notch + Android) + reduz zoom/gestos -->
+  <meta
+    name="viewport"
+    content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1, user-scalable=no"
+  />
 
-  <!-- Tema / PWA -->
+  <!-- ✅ Tema / PWA -->
   <meta name="theme-color" content="#070A14" />
+  <meta name="theme-color" media="(prefers-color-scheme: light)" content="#f6f7fb" />
   <meta name="color-scheme" content="dark light" />
   <meta name="mobile-web-app-capable" content="yes" />
   <meta name="application-name" content="Doce Lucro" />
 
-  <!-- iOS -->
+  <!-- ✅ iOS -->
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-title" content="Doce Lucro" />
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
   <meta name="format-detection" content="telephone=no" />
 
-  <!-- SEO -->
+  <!-- ✅ SEO -->
   <meta name="description" content="Doce Lucro — Lucro real em segundos" />
   <link rel="canonical" href="." />
 
   <title>Doce Lucro</title>
 
-  <!-- Manifest -->
+  <!-- ✅ Manifest -->
   <link rel="manifest" href="./manifest.webmanifest" />
 
-  <!-- Ícones -->
+  <!-- ✅ Ícones -->
   <link rel="icon" href="./assets/icons/icon-192.png" />
   <link rel="apple-touch-icon" href="./assets/icons/icon-192.png" />
   <!-- Se tiver 180x180, use abaixo -->
   <!-- <link rel="apple-touch-icon" sizes="180x180" href="./assets/icons/apple-touch-icon.png" /> -->
 
-  <!-- CSS (nova estrutura em subpastas/arquivos) -->
+  <!-- ✅ CSS (nova estrutura em subpastas/arquivos) -->
   <link rel="stylesheet" href="./styles/styles.css" />
-  <!-- Preload JS (opcional, mas ok manter) -->
+
+  <!-- ✅ Preload JS (opcional) -->
   <link rel="modulepreload" href="./src/app.js" />
 </head>
 
@@ -104,7 +109,7 @@
     <div id="modalContainer"></div>
   </div>
 
-  <!-- JS principal -->
+  <!-- ✅ JS principal -->
   <script type="module" src="./src/app.js"></script>
 </body>
 </html>

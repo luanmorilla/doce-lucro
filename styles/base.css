@@ -1,32 +1,70 @@
 /* =========================================================
-   RESET / BASE + iOS FIX
+   DOCE LUCRO — BASE / RESET (Mobile First) + iOS FIX
+   - estabilidade no iPhone (zoom, barras, safe area)
+   - reset moderno sem quebrar layout
 ========================================================= */
-* { box-sizing: border-box; }
-html, body { height: 100%; width: 100%; }
 
+/* ---------- Reset essencial ---------- */
+*,
+*::before,
+*::after { box-sizing: border-box; }
+
+html { height: 100%; -webkit-text-size-adjust: 100%; }
+body { min-height: 100%; }
+
+/* ✅ viewport height estável (Safari/iOS) */
+html, body { width: 100%; }
+body {
+  /* fallback */
+  min-height: 100vh;
+  /* modernos */
+  min-height: 100svh; /* “small viewport” (evita salto ao abrir teclado) */
+  min-height: 100dvh; /* “dynamic viewport” (corrige barra Safari) */
+}
+
+/* ---------- Body ---------- */
 body {
   margin: 0;
   font-family: "Inter", ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial;
   color: var(--text);
+
   background:
     radial-gradient(1200px 720px at 20% -10%, rgba(255, 79, 163, 0.16), transparent 58%),
     radial-gradient(900px 620px at 95% 0%, rgba(124, 92, 255, 0.16), transparent 56%),
     radial-gradient(900px 700px at 50% 110%, rgba(46, 229, 157, 0.08), transparent 60%),
     linear-gradient(180deg, var(--bg), var(--bg2));
+
   overflow-x: hidden;
+
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
-  -webkit-tap-highlight-color: rgba(255, 79, 163, 0.18);
+
+  /* toque/seleção */
+  -webkit-tap-highlight-color: rgba(255, 79, 163, 0.16);
+  touch-action: manipulation;
+
+  /* scroll mais “sólido”, mas sem travar */
+  overscroll-behavior-x: none;
   overscroll-behavior-y: none;
-  -webkit-text-size-adjust: 100%;
 }
 
+/* ---------- mídia ---------- */
 img, svg, video, canvas { max-width: 100%; height: auto; display: block; }
-input, select, textarea, button { font: inherit; }
+
+/* ---------- links/botões ---------- */
 a { color: inherit; text-decoration: none; }
 button { font-family: inherit; }
+
+/* ✅ Inputs herdarem fonte direito (evita variação iOS) */
+input, select, textarea, button {
+  font: inherit;
+  letter-spacing: inherit;
+}
+
+/* seleção */
 ::selection { background: rgba(255, 79, 163, 0.22); }
 
+/* ---------- focus ---------- */
 :focus-visible {
   outline: 0;
   box-shadow: var(--ring);
@@ -38,7 +76,7 @@ button { font-family: inherit; }
   transition: background-color 180ms ease, color 180ms ease, border-color 180ms ease, box-shadow 180ms ease !important;
 }
 
-/* scrollbar */
+/* ---------- scrollbar (desktop) ---------- */
 *::-webkit-scrollbar { width: 10px; height: 10px; }
 *::-webkit-scrollbar-thumb {
   background: rgba(255,255,255,0.14);
@@ -50,16 +88,48 @@ button { font-family: inherit; }
 *::-webkit-scrollbar-track { background: transparent; }
 
 /* =========================================================
-   ✅ iOS FIX — mata o zoom automático em inputs
-   (Safari dá zoom quando font-size < 16px)
+   ✅ iOS FIX — ZOOM + FORM CONTROLS
+   Safari dá zoom ao focar input com font-size < 16px
 ========================================================= */
+
+/* 1) trava o zoom no foco (font-size 16) só no iOS */
 @supports (-webkit-touch-callout: none) {
-  input, select, textarea {
+  input,
+  select,
+  textarea {
     font-size: 16px !important;
+  }
+
+  /* 2) remove “estilos nativos” que bagunçam (principalmente select) */
+  input,
+  textarea,
+  select {
+    -webkit-appearance: none;
+    appearance: none;
+  }
+
+  /* 3) melhora toque e evita highlight estranho */
+  button,
+  .btn,
+  .pill,
+  .nav__item,
+  .iconbtn,
+  .qbtn {
+    -webkit-tap-highlight-color: rgba(0,0,0,0);
   }
 }
 
-/* Reduce Motion */
+/* 4) evita zoom/auto-ajuste do Safari em inputs de dinheiro */
+input[type="number"]::-webkit-outer-spin-button,
+input[type="number"]::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+input[type="number"] { -moz-appearance: textfield; }
+
+/* =========================================================
+   ✅ Reduce Motion
+========================================================= */
 @media (prefers-reduced-motion: reduce) {
   * { transition: none !important; scroll-behavior: auto !important; }
 }
