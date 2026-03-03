@@ -139,9 +139,48 @@ function render(route) {
   (routes[route] || routes.home)();
 }
 
+function normalizeRoute(r) {
+  return String(r || "").replace("#", "").trim();
+}
+
+function shouldShowNav(route, isLogged) {
+  // esconde no login e quando não está logado
+  if (!isLogged) return false;
+  if (route === "login") return false;
+  return true;
+}
+
+function setNavVisible(visible) {
+  const nav = qs(".nav");
+  if (!nav) return;
+  nav.style.display = visible ? "flex" : "none";
+}
+
+// ✅ deixa a nav com 4 itens no mobile, sem quebrar no iPhone
+function enforceNavFourItems() {
+  // mantém só esses 4
+  const keep = new Set(["home", "sale", "orders", "products"]);
+
+  qsa(".nav__item").forEach((btn) => {
+    const r = btn?.dataset?.route;
+    if (!r) return;
+
+    if (!keep.has(r)) {
+      btn.style.display = "none"; // some com reports e more
+      btn.setAttribute("aria-hidden", "true");
+      btn.tabIndex = -1;
+    } else {
+      btn.style.display = ""; // garante que os 4 aparecem
+      btn.removeAttribute("aria-hidden");
+      btn.tabIndex = 0;
+    }
+  });
+}
+
 async function mount() {
   state = getState();
 
+  // ✅ aplica tema/marca logo de cara (evita “tela preta” sem UI)
   setTheme(state.theme || "dark");
   setBrand(state.storeName || "");
 
@@ -156,13 +195,32 @@ async function mount() {
     syncThemeIcon(btnTheme);
   });
 
+  // ✅ força nav com 4 itens (corrige “Mais” quebrado no iPhone)
+  enforceNavFourItems();
+
+  // wrapper pra sempre controlar nav visível antes/depois de navegar
+  const go = async (route, replace = false) => {
+    const r = normalizeRoute(route);
+    const logged = !!getUserId();
+
+    // ✅ se não estiver logado, SEMPRE joga pra login
+    const finalRoute = logged ? (r || "home") : "login";
+
+    // ✅ esconde/mostra a nav antes de renderizar a tela
+    setNavVisible(shouldShowNav(finalRoute, logged));
+
+    // agora navega normal
+    return navigate(finalRoute, replace);
+  };
+
   window.addEventListener("hashchange", () => {
-    const r = (location.hash || "").replace("#", "").trim();
-    if (r) navigate(r, true);
+    const r = normalizeRoute(location.hash);
+    go(r, true);
   });
 
+  // ✅ clique dos botões
   qsa(".nav__item").forEach((btn) => {
-    btn.addEventListener("click", () => navigate(btn.dataset.route));
+    btn.addEventListener("click", () => go(btn.dataset.route));
   });
 
   // ✅ sessão + cloud
@@ -179,8 +237,9 @@ async function mount() {
     unbindCloudSaveHook();
   }
 
-  const hashRoute = (location.hash || "").replace("#", "").trim();
-  navigate(hashRoute || state.route || "home", true);
+  // ✅ rota inicial (sem “tela preta”)
+  const hashRoute = normalizeRoute(location.hash);
+  await go(hashRoute || state.route || "home", true);
 
   // UX dinheiro global
   bindGlobalMoneyUX();

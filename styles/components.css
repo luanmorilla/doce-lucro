@@ -508,4 +508,33 @@
       0 14px 38px rgba(255,77,109,0.18),
       0 14px 38px rgba(255,122,89,0.14),
       0 0 0 1px rgba(0,0,0,0.06) inset;
+  }/* Topbar actions (Relatórios + Mais) */
+.topbar__actions{
+    display:flex;
+    align-items:center;
+    gap:10px;
+  }
+  
+  .iconbtn--text{
+    display:flex;
+    align-items:center;
+    gap:8px;
+    padding:10px 12px;
+    border-radius: 16px;
+    min-height: 44px;
+    white-space: nowrap;
+  }
+  
+  .iconbtn--text .txt{
+    font-weight: 950;
+    font-size: 12px;
+    letter-spacing: -0.1px;
+    color: var(--text);
+    opacity: .92;
+  }
+  
+  /* em telas bem pequenas some o texto e fica só o ícone */
+  @media (max-width: 380px){
+    .iconbtn--text .txt{ display:none; }
+    .iconbtn--text{ padding:10px 10px; }
   }

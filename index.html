@@ -63,13 +63,19 @@
         </div>
 
         <div class="topbar__actions">
+          <button class="iconbtn iconbtn--text" id="btnReports" type="button" aria-label="Relatórios">
+            <span class="icon">📈</span>
+            <span class="txt">Relatórios</span>
+          </button>
+        
+          <button class="iconbtn" id="btnMore" type="button" aria-label="Mais">
+            <span class="icon">⚙️</span>
+          </button>
+        
           <button class="iconbtn" id="btnTheme" type="button" aria-label="Tema">
             <span class="icon">🌙</span>
           </button>
         </div>
-      </div>
-    </header>
-
     <main class="content">
       <div id="viewRoot"></div>
     </main>
@@ -79,35 +85,22 @@
         <div class="nav__icon">🏠</div>
         <div class="nav__label">Início</div>
       </button>
-
+    
       <button class="nav__item" data-route="sale" type="button">
         <div class="nav__icon">💳</div>
         <div class="nav__label">Venda</div>
       </button>
-
+    
       <button class="nav__item" data-route="orders" type="button">
         <div class="nav__icon">📦</div>
         <div class="nav__label">Encom.</div>
       </button>
-
+    
       <button class="nav__item" data-route="products" type="button">
         <div class="nav__icon">🎂</div>
         <div class="nav__label">Produtos</div>
       </button>
-
-      <button class="nav__item" data-route="reports" type="button">
-        <div class="nav__icon">📈</div>
-        <div class="nav__label">Relatórios</div>
-      </button>
-
-      <button class="nav__item" data-route="more" type="button">
-        <div class="nav__icon">⚙️</div>
-        <div class="nav__label">Mais</div>
-      </button>
     </nav>
-
-    <div id="modalContainer"></div>
-  </div>
 
   <!-- ✅ JS principal -->
   <script type="module" src="./src/app.js"></script>
