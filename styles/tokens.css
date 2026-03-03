@@ -1,6 +1,6 @@
 /* =========================================================
    DOCE LUCRO — TOKENS / THEME
-   - Variáveis, cores, sombras, radii, safe-area
+   - Variáveis, cores, sombras, radii, safe-area (FIX iOS)
 ========================================================= */
 
 :root {
@@ -39,10 +39,14 @@
     --r2: 16px;
     --r3: 12px;
   
-    /* safe area */
-    --safeTop: max(env(safe-area-inset-top, 0px), 0px);
-    --safeBottom: max(env(safe-area-inset-bottom, 0px), 12px);
+    /* ✅ safe-area (FIX)
+       - NÃO força 12px no iPhone (isso é o que quebrava o dock)
+       - fallback seguro pra Android/desktop = 0px
+    */
+    --safeTop: env(safe-area-inset-top, 0px);
+    --safeBottom: env(safe-area-inset-bottom, 0px);
   
+    /* layout max width */
     --maxw: 1060px;
   
     /* focus ring */
@@ -55,8 +59,8 @@
     --transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
   
     /* NAV sizing */
-    --nav-gap: 10px;
-    --nav-h: 78px;
+    --nav-gap: 12px;
+    --nav-h: 76px;
   
     /* sizing helpers */
     --tap: 44px;
